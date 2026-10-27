@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "agent-workflows console API",
-    "description": "操作台后端 API：提供工作流运行列表、启动、详情查询与人工审批（interrupt/resume）接口。前后端唯一契约文件位于 shared/openapi.json。",
-    "version": "0.2.0"
+    "description": "操作台后端 API：提供工作流定义管理（/api/workflows）、运行列表、启动、详情查询与人工审批（interrupt/resume）接口。前后端唯一契约文件位于 shared/openapi.json。",
+    "version": "0.3.0"
   },
   "paths": {
     "/api/health": {
@@ -17,6 +17,176 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows": {
+      "get": {
+        "summary": "列出所有工作流定义（含节点与连线拓扑）",
+        "operationId": "list_workflows_api_workflows_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowListOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "创建或更新工作流定义（外部 Agent 或前端可调用，落盘后 Web 立即可见）",
+        "operationId": "save_workflow_api_workflows_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSpec"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{workflow_id}": {
+      "get": {
+        "summary": "获取单个工作流的完整定义与拓扑结构",
+        "operationId": "get_workflow_api_workflows__workflow_id__get",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSpec"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除自定义工作流（内置 coding 工作流不可删除）",
+        "operationId": "delete_workflow_api_workflows__workflow_id__delete",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteWorkflowOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -66,11 +236,31 @@
             }
           },
           "400": {
-            "description": "Bad Request (e.g., empty task or invalid repo path)",
+            "description": "Bad Request",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -105,11 +295,21 @@
             }
           },
           "404": {
-            "description": "Run Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -133,14 +333,14 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ResumeIn"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -154,11 +354,21 @@
             }
           },
           "409": {
-            "description": "Run is not in waiting state",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -204,6 +414,82 @@
         ],
         "title": "DebugThreadsOut"
       },
+      "DeleteWorkflowOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "workflow_id": {
+            "type": "string",
+            "title": "Workflow Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "workflow_id"
+        ],
+        "title": "DeleteWorkflowOut"
+      },
+      "EdgeSpec": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "起始节点 ID"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target",
+            "description": "直接连线的目标节点 ID（或 'END'）；若为条件边则留空"
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/RouteRule"
+            },
+            "type": "array",
+            "title": "Conditions",
+            "description": "条件路由规则列表（按顺序匹配，首个命中的规则生效）"
+          },
+          "default_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Target",
+            "description": "条件边所有规则均未命中时的兜底目标节点 ID（或 'END'）"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "普通边在画布上的连线标签"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "title": "EdgeSpec"
+      },
       "ErrorOut": {
         "properties": {
           "error": {
@@ -216,6 +502,19 @@
           "error"
         ],
         "title": "ErrorOut"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
       },
       "HealthOut": {
         "properties": {
@@ -247,7 +546,7 @@
               }
             ],
             "title": "Stage",
-            "description": "审批阶段：plan_approval | final_approval"
+            "description": "审批阶段：plan_approval | final_approval 等"
           },
           "task": {
             "anyOf": [
@@ -309,16 +608,205 @@
               "type": "string"
             },
             "type": "array",
-            "title": "Options",
-            "default": [
-              "approve",
-              "revise",
-              "abort"
-            ]
+            "title": "Options"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "InterruptPayload"
+      },
+      "NodePosition": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X",
+            "default": 0.0
+          },
+          "y": {
+            "type": "number",
+            "title": "Y",
+            "default": 0.0
           }
         },
         "type": "object",
-        "title": "InterruptPayload"
+        "title": "NodePosition"
+      },
+      "NodeSpec": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "节点唯一标识（图内唯一，不可为 START/END）"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "节点显示名称（供 Web 画布展示）"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "gate",
+              "shell",
+              "summary"
+            ],
+            "title": "Kind",
+            "description": "节点类型：agent | gate | shell | summary"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "节点职责说明"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodePosition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "前端画布坐标（可选，未传时前端自动布局）"
+          },
+          "prompt_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Template",
+            "description": "agent 节点的提示词模板，支持 {task}、{plan}、{patch}、{feedback}、{test_output}、{attempt} 等 state 变量占位符"
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": [
+              "read-only",
+              "workspace-write"
+            ],
+            "title": "Sandbox",
+            "description": "agent 执行沙箱权限：read-only（只读分析）| workspace-write（允许修改代码）",
+            "default": "read-only"
+          },
+          "output_key": {
+            "type": "string",
+            "title": "Output Key",
+            "description": "节点输出写入 state 的字段名（如 plan / patch / review / test_output）",
+            "default": "plan"
+          },
+          "capture_git_diff": {
+            "type": "boolean",
+            "title": "Capture Git Diff",
+            "description": "是否在 agent 执行后抓取 repo 的 git diff 作为 output_key 的值（常用于 implement 节点）",
+            "default": false
+          },
+          "increment_attempt": {
+            "type": "boolean",
+            "title": "Increment Attempt",
+            "description": "进入节点时是否将 state['attempt'] + 1",
+            "default": false
+          },
+          "event_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Template",
+            "description": "写入 events 列表的日志模板，支持 {id}、{attempt}、{ok_or_ng}、{pass_or_fail}、{action}"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "description": "人审阶段标识，如 plan_approval / final_approval",
+            "default": "approval"
+          },
+          "expose_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Expose Keys",
+            "description": "interrupt 时暴露给前端审批卡片展示的 state 字段列表"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Options",
+            "description": "允许的人工审批动作列表"
+          },
+          "cmd_key": {
+            "type": "string",
+            "title": "Cmd Key",
+            "description": "从 state 中读取要执行的 shell 命令字段名",
+            "default": "test_cmd"
+          },
+          "default_cmd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Cmd",
+            "description": "当 state[cmd_key] 为空时使用的默认命令"
+          },
+          "fallback_prompt_template": {
+            "type": "string",
+            "title": "Fallback Prompt Template",
+            "description": "未配置 shell 命令时回退调用 agent 的 prompt 模板",
+            "default": "TEST: 运行测试（第 {attempt} 次）"
+          },
+          "passed_key": {
+            "type": "string",
+            "title": "Passed Key",
+            "description": "命令是否成功（退出码 0）写入 state 的布尔字段名",
+            "default": "passed"
+          },
+          "result_template": {
+            "type": "string",
+            "title": "Result Template",
+            "description": "终态汇总写入 state['result'] 的文本模板",
+            "default": "完成：{task}"
+          },
+          "abort_result_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abort Result Template",
+            "description": "当 state['action'] == 'abort' 时优先使用的汇总模板"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "kind"
+        ],
+        "title": "NodeSpec"
       },
       "ResumeIn": {
         "properties": {
@@ -361,12 +849,88 @@
         ],
         "title": "ResumeOut"
       },
+      "RouteRule": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field",
+            "description": "要判断的 state 字段名，如 action / passed / attempt"
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "==",
+              "!=",
+              ">=",
+              "<=",
+              ">",
+              "<",
+              "truthy",
+              "falsy"
+            ],
+            "title": "Op",
+            "description": "比较运算符：== | != | >= | <= | > | < | truthy | falsy",
+            "default": "=="
+          },
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "比较常量值（如 'approve'、True、2）"
+          },
+          "value_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Ref",
+            "description": "动态引用另一个 state 字段进行比较（如 'max_attempts'）"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target",
+            "description": "命中条件时跳转的目标节点 ID（或 'END'）"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "条件分支在画布上的连线标签"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "target"
+        ],
+        "title": "RouteRule"
+      },
       "RunIn": {
         "properties": {
           "task": {
             "type": "string",
             "title": "Task",
             "description": "任务描述，例如：给 verify_graph.py 加 --verbose 参数"
+          },
+          "workflow_id": {
+            "type": "string",
+            "title": "Workflow Id",
+            "description": "要运行的工作流 ID（默认 'coding'）",
+            "default": "coding"
           },
           "repo": {
             "anyOf": [
@@ -382,8 +946,8 @@
           },
           "max_attempts": {
             "type": "integer",
-            "maximum": 10,
-            "minimum": 1,
+            "maximum": 10.0,
+            "minimum": 1.0,
             "title": "Max Attempts",
             "description": "测试-修复循环最大尝试次数",
             "default": 2
@@ -429,6 +993,12 @@
             "type": "string",
             "title": "Thread Id"
           },
+          "workflow_id": {
+            "type": "string",
+            "title": "Workflow Id",
+            "description": "该运行所属的工作流 ID",
+            "default": "coding"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -446,8 +1016,7 @@
               "type": "string"
             },
             "type": "array",
-            "title": "Next",
-            "default": []
+            "title": "Next"
           },
           "values": {
             "$ref": "#/components/schemas/RunValues"
@@ -457,8 +1026,7 @@
               "$ref": "#/components/schemas/InterruptPayload"
             },
             "type": "array",
-            "title": "Interrupts",
-            "default": []
+            "title": "Interrupts"
           },
           "created_at": {
             "anyOf": [
@@ -662,10 +1230,10 @@
               "type": "string"
             },
             "type": "array",
-            "title": "Events",
-            "default": []
+            "title": "Events"
           }
         },
+        "additionalProperties": true,
         "type": "object",
         "title": "RunValues"
       },
@@ -675,20 +1243,151 @@
             "type": "string",
             "title": "Thread Id"
           },
+          "workflow_id": {
+            "type": "string",
+            "title": "Workflow Id"
+          },
           "warnings": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Warnings",
-            "default": []
+            "title": "Warnings"
           }
         },
         "type": "object",
         "required": [
-          "thread_id"
+          "thread_id",
+          "workflow_id"
         ],
         "title": "StartRunOut"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WorkflowListOut": {
+        "properties": {
+          "workflows": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSpec"
+            },
+            "type": "array",
+            "title": "Workflows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workflows"
+        ],
+        "title": "WorkflowListOut"
+      },
+      "WorkflowSpec": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Id",
+            "description": "工作流唯一 ID（字母、数字、下划线、连字符）"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "工作流名称"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "工作流用途描述",
+            "default": ""
+          },
+          "builtin": {
+            "type": "boolean",
+            "title": "Builtin",
+            "description": "是否为系统内置工作流",
+            "default": false
+          },
+          "entry_point": {
+            "type": "string",
+            "title": "Entry Point",
+            "description": "入口节点 ID（START 指向的第一个节点）"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeSpec"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Nodes",
+            "description": "工作流节点列表"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeSpec"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Edges",
+            "description": "工作流连线与条件路由列表"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At",
+            "description": "最近更新时间（ISO-8601）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "entry_point",
+          "nodes",
+          "edges"
+        ],
+        "title": "WorkflowSpec"
       }
     }
   }
