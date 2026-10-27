@@ -15,11 +15,13 @@ import sqlite3
 import threading
 import time
 import traceback
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -27,7 +29,9 @@ from langgraph.types import Command
 from src.workflows.coding import build
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("CONSOLE_DB", os.path.join(HERE, "..", "data", "checkpoints.sqlite"))
+ROOT = os.path.abspath(os.path.join(HERE, ".."))
+DB_PATH = os.environ.get("CONSOLE_DB", os.path.join(ROOT, "data", "checkpoints.sqlite"))
+FRONTEND_DIST = os.environ.get("CONSOLE_FRONTEND_DIST", os.path.join(ROOT, "frontend", "dist"))
 REPO_DEFAULT = os.environ.get("CONSOLE_REPO_DEFAULT", "/opt/agent-workflows/demo-repo")
 AGENT_KIND = os.environ.get("CONSOLE_AGENT", "stub")  # stub | codex
 
@@ -50,7 +54,19 @@ _async_lock = threading.Lock()   # 串行化 invoke（SqliteSaver 单写者更�
 _errors: dict[str, str] = {}
 _active: set[str] = set()        # 本进程内正在执行的 thread
 
-app = FastAPI(title="agent-workflows console")
+app = FastAPI(
+    title="agent-workflows console API",
+    version="0.2.0",
+    description="操作台后端 API：提供工作流运行列表、启动、详情查询与人工审批（interrupt/resume）接口。前后端唯一契约文件位于 shared/openapi.json。",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _tracing_callbacks(tid: str) -> list:
@@ -158,25 +174,92 @@ def _flush_traces() -> None:
         pass
 
 
-# ---------------------------------------------------------------- API
+# ---------------------------------------------------------------- API Models (Contract)
+RunStatus = Literal["waiting", "running", "done", "error", "interrupted", "unknown"]
+ResumeAction = Literal["approve", "revise", "abort"]
+
+
 class RunIn(BaseModel):
-    task: str
-    repo: Optional[str] = None
-    max_attempts: int = 2
-    test_cmd: Optional[str] = None
+    task: str = Field(..., description="任务描述，例如：给 verify_graph.py 加 --verbose 参数")
+    repo: Optional[str] = Field(None, description="目标 git 仓库路径（服务器本地路径）")
+    max_attempts: int = Field(2, ge=1, le=10, description="测试-修复循环最大尝试次数")
+    test_cmd: Optional[str] = Field(None, description="测试命令（在 repo 下执行，退出码 0 视为通过）")
 
 
 class ResumeIn(BaseModel):
-    action: str = "approve"      # approve | revise | abort
-    feedback: str = ""
+    action: ResumeAction = Field("approve", description="审批动作：approve(通过) | revise(打回重改) | abort(中止)")
+    feedback: str = Field("", description="revise 时的修改意见（approve/abort 可留空）")
 
 
-@app.get("/api/health")
+class HealthOut(BaseModel):
+    ok: bool
+    agent: str
+
+
+class RunValues(BaseModel):
+    task: Optional[str] = None
+    repo: Optional[str] = None
+    test_cmd: Optional[str] = None
+    max_attempts: Optional[int] = None
+    plan: Optional[str] = None
+    feedback: Optional[str] = None
+    action: Optional[str] = None
+    approved: Optional[bool] = None
+    attempt: Optional[int] = None
+    patch: Optional[str] = None
+    test_output: Optional[str] = None
+    passed: Optional[bool] = None
+    review: Optional[str] = None
+    result: Optional[str] = None
+    events: list[str] = Field(default_factory=list)
+
+
+class InterruptPayload(BaseModel):
+    stage: Optional[str] = Field(None, description="审批阶段：plan_approval | final_approval")
+    task: Optional[str] = None
+    plan: Optional[str] = None
+    patch: Optional[str] = None
+    test_output: Optional[str] = None
+    review: Optional[str] = None
+    options: list[str] = Field(default_factory=lambda: ["approve", "revise", "abort"])
+
+
+class RunStateOut(BaseModel):
+    thread_id: str
+    status: RunStatus
+    next: list[str] = Field(default_factory=list)
+    values: RunValues = Field(default_factory=RunValues)
+    interrupts: list[InterruptPayload] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    error: Optional[str] = None
+    source: Optional[str] = None
+
+
+class RunListOut(BaseModel):
+    runs: list[RunStateOut]
+
+
+class StartRunOut(BaseModel):
+    thread_id: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ResumeOut(BaseModel):
+    ok: bool
+    thread_id: str
+
+
+class DebugThreadsOut(BaseModel):
+    threads: list[str]
+
+
+# ---------------------------------------------------------------- Routes
+@app.get("/api/health", response_model=HealthOut)
 def health() -> dict:
     return {"ok": True, "agent": AGENT_KIND}
 
 
-@app.get("/api/runs")
+@app.get("/api/runs", response_model=RunListOut)
 def list_runs() -> dict:
     tids = _list_threads()
     runs = [_run_state(t) for t in tids]
@@ -184,8 +267,8 @@ def list_runs() -> dict:
     return {"runs": runs}
 
 
-@app.post("/api/runs")
-def start_run(body: RunIn) -> dict:
+@app.post("/api/runs", response_model=StartRunOut)
+def start_run(body: RunIn) -> Any:
     task = (body.task or "").strip()
     if not task:
         return JSONResponse({"error": "任务描述不能为空"}, status_code=400)
@@ -215,13 +298,13 @@ def start_run(body: RunIn) -> dict:
     return {"thread_id": tid, "warnings": warnings}
 
 
-@app.get("/api/runs/{tid}")
-def get_run(tid: str) -> dict:
+@app.get("/api/runs/{tid}", response_model=RunStateOut)
+def get_run(tid: str) -> Any:
     return run_state_or_404(tid)
 
 
-@app.post("/api/runs/{tid}/resume")
-def resume_run(tid: str, body: ResumeIn) -> dict:
+@app.post("/api/runs/{tid}/resume", response_model=ResumeOut)
+def resume_run(tid: str, body: ResumeIn) -> Any:
     st = _run_state(tid)
     if st["status"] != "waiting":
         return JSONResponse({"error": f"run 不在等待审批状态: {st['status']}"}, status_code=409)
@@ -233,19 +316,27 @@ def resume_run(tid: str, body: ResumeIn) -> dict:
     return {"ok": True, "thread_id": tid}
 
 
-def run_state_or_404(tid: str) -> dict:
+def run_state_or_404(tid: str) -> Any:
     st = _run_state(tid)
     if st["status"] == "unknown":
-        return JSONResponse({"error": "not found"}, status_code=404)  # type: ignore[return-value]
+        return JSONResponse({"error": "not found"}, status_code=404)
     return st
 
 
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse(os.path.join(HERE, "index.html"), media_type="text/html")
-
-
-@app.get("/api/debug/threads")
+@app.get("/api/debug/threads", response_model=DebugThreadsOut)
 def debug_threads() -> dict:
     """排查用：直接看 checkpoint 里有哪些 thread。"""
     return {"threads": _list_threads(200)}
+
+
+# 静态产物托管：若 frontend/dist 已构建则优先托管新前端，否则回退到旧版 console/index.html
+if os.path.isdir(os.path.join(FRONTEND_DIST, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+
+
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    dist_index = os.path.join(FRONTEND_DIST, "index.html")
+    if os.path.isfile(dist_index):
+        return FileResponse(dist_index, media_type="text/html")
+    return FileResponse(os.path.join(HERE, "index.html"), media_type="text/html")
