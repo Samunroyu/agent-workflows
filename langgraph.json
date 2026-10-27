@@ -1,0 +1,7 @@
+{
+  "dependencies": ["langgraph", "langgraph-checkpoint-sqlite", "langchain", "langsmith"],
+  "graphs": {
+    "verify_graph": "./examples/verify_graph.py:graph",
+    "coding": "./src/workflows/coding.py:graph"
+  }
+}

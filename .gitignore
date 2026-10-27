@@ -1,0 +1,21 @@
+# LangGraph 环境（自包含的 500MB 运行时，不要提交）
+/.venv/
+/python/
+/cache/
+/bin/uv
+/.langgraph_api/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.env
+/env.sh
+/data/
+/dl/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+.DS_Store
+*.pem
+*.key
