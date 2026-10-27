@@ -20,7 +20,6 @@ from typing import Any, Literal, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
@@ -525,9 +524,14 @@ try:
 except Exception as _mcp_exc:  # noqa: BLE001
     print(f"[warn] MCP HTTP 挂载跳过: {_mcp_exc}", flush=True)
 
-# 静态产物托管：若 frontend/dist 已构建则优先托管新前端，否则回退到旧版 console/index.html
-if os.path.isdir(os.path.join(FRONTEND_DIST, "assets")):
-    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+# 静态产物托管：动态按请求读取 frontend/dist/assets，支持先启动后端、后执行 npm run build 热更新静态资源
+@app.get("/assets/{file_path:path}", include_in_schema=False)
+def frontend_assets(file_path: str) -> Any:
+    assets_root = os.path.abspath(os.path.join(FRONTEND_DIST, "assets"))
+    target = os.path.abspath(os.path.join(assets_root, file_path))
+    if not target.startswith(assets_root + os.sep) or not os.path.isfile(target):
+        return JSONResponse({"error": "asset not found"}, status_code=404)
+    return FileResponse(target)
 
 
 @app.get("/", include_in_schema=False)
