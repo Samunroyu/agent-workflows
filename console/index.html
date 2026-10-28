@@ -2,7 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="text-scale" content="scale" />
 <title>agent-workflows 操作台</title>
 <style>
   :root {
@@ -10,59 +11,108 @@
     --fg: #e6e9ef; --muted: #8b93a7; --accent: #5b8def;
     --ok: #35c07a; --warn: #e0a33e; --err: #e05c5c; --wait: #b06bd8;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg);
-         font: 13px/1.5 -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif; }
-  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
-           border-bottom: 1px solid var(--line); background: var(--panel); }
-  header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .3px; }
-  header .badge { font-size: 11px; color: var(--muted); border: 1px solid var(--line);
-                  padding: 2px 8px; border-radius: 999px; }
-  .layout { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 45px); }
+  header, .layout, aside, main, .newrun, .card, .run, input, textarea, button, pre {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+    font-size: 0.875rem; line-height: 1.5;
+  }
+  header {
+    display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 1rem;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 0.9375rem; margin: 0; font-weight: 600; letter-spacing: 0.02em; }
+  header .badge {
+    font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line);
+    padding: 0.125rem 0.5rem; border-radius: 999px;
+  }
+  .layout { display: grid; grid-template-columns: 18.75rem 1fr; min-height: calc(100vh - 2.8125rem); }
   aside { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
-  main { overflow-y: auto; padding: 16px; }
-  .newrun { padding: 12px; border-bottom: 1px solid var(--line); }
-  .newrun textarea, .newrun input { width: 100%; background: var(--bg); color: var(--fg);
-    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: inherit; margin-bottom: 6px; }
-  .newrun textarea { resize: vertical; min-height: 56px; }
-  button { cursor: pointer; border: 1px solid var(--line); background: var(--panel2); color: var(--fg);
-           border-radius: 6px; padding: 6px 12px; font: inherit; }
-  button:hover { border-color: #3d475a; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  main { overflow-y: auto; padding: 1rem; }
+  .newrun { padding: 0.75rem; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 0.375rem; }
+  .field-label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--muted); margin-top: 0.25rem; }
+  .newrun textarea, .newrun input {
+    width: 100%; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 0.4375rem 0.5625rem;
+    font: inherit; font-size: 1rem;
+  }
+  .newrun textarea { resize: vertical; min-height: 3.5rem; }
+  .newrun textarea:user-invalid, .newrun input:user-invalid {
+    border-color: var(--err); background: #261418;
+  }
+  .error-msg { display: none; color: #f08e8e; font-size: 0.75rem; margin: 0.125rem 0 0.25rem; }
+  .newrun textarea:user-invalid + .error-msg { display: block; }
+  button {
+    cursor: pointer; border: 1px solid var(--line); background: var(--panel2); color: var(--fg);
+    border-radius: 6px; padding: 0.375rem 0.75rem; font: inherit; min-height: 1.75rem;
+  }
+  button:hover:not(:disabled) { border-color: #3d475a; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, pre:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; margin-top: 0.25rem; }
   button.ok { background: #1d6f47; border-color: #2a8f5e; color: #dcf6e8; }
   button.warn { background: #6d5119; border-color: #8a6a24; color: #f6ecd7; }
   button.err { background: #6d2626; border-color: #8f3232; color: #f8dede; }
   button:disabled { opacity: .45; cursor: not-allowed; }
-  .run { padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
-  .run:hover { background: var(--panel2); }
+  .run {
+    width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+    border-radius: 0; background: transparent; padding: 0.625rem 0.75rem; cursor: pointer; display: block;
+  }
+  .run:hover:not(:disabled) { background: var(--panel2); }
   .run.active { background: #222838; box-shadow: inset 2px 0 0 var(--accent); }
-  .run .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .run .m { color: var(--muted); font-size: 11px; margin-top: 3px; display: flex; gap: 8px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .run .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .run .m { color: var(--muted); font-size: 0.75rem; margin-top: 0.1875rem; display: flex; gap: 0.5rem; }
+  .dot { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; display: inline-block; margin-right: 0.375rem; }
   .s-waiting { background: var(--wait); } .s-running { background: var(--warn); animation: pulse 1.2s infinite; }
   .s-done { background: var(--ok); } .s-error { background: var(--err); }
   @keyframes pulse { 50% { opacity: .35; } }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-          padding: 14px; margin-bottom: 14px; }
-  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
-             margin: 0 0 10px; font-weight: 600; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  @media (prefers-reduced-motion: reduce) {
+    .s-running { animation-duration: 4s; }
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 0.875rem; margin-bottom: 0.875rem;
+  }
+  .card h2 {
+    font-size: 0.75rem; letter-spacing: 0.05em; color: var(--muted);
+    margin: 0 0 0.625rem; font-weight: 600;
+  }
+  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
   .muted { color: var(--muted); }
-  pre { background: #0b0d11; border: 1px solid var(--line); border-radius: 6px; padding: 10px;
-        overflow: auto; max-height: 380px; margin: 8px 0 0; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; }
+  pre {
+    background: #0b0d11; border: 1px solid var(--line); border-radius: 6px; padding: 0.625rem;
+    overflow: auto; max-height: 23.75rem; margin: 0.5rem 0 0;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.75rem; line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  pre code { font: inherit; }
   .diff .add { color: #7fdca4; } .diff .del { color: #f08e8e; } .diff .hunk { color: #7aa2f7; }
-  .events { display: flex; flex-wrap: wrap; gap: 6px; }
-  .ev { font: 11px ui-monospace, Menlo, monospace; background: var(--panel2); border: 1px solid var(--line);
-        border-radius: 999px; padding: 2px 9px; color: var(--muted); }
+  .events { display: flex; flex-wrap: wrap; gap: 0.375rem; list-style: none; padding: 0; margin: 0; }
+  .ev {
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 999px; padding: 0.125rem 0.5625rem; color: var(--muted);
+  }
   .ev.gate { color: #d9b3f0; border-color: #4a3560; }
   .ev.fail { color: #f0a0a0; border-color: #5c2f2f; }
   .ev.pass { color: #9fe0bd; border-color: #2c5c45; }
-  textarea.fb { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
-                border-radius: 6px; padding: 8px; font: inherit; min-height: 48px; margin-top: 8px; }
-  .empty { color: var(--muted); padding: 40px; text-align: center; }
-  .kv { display: grid; grid-template-columns: 90px 1fr; gap: 4px 10px; font-size: 12px; }
-  .kv .k { color: var(--muted); }
-  .result { border-left: 3px solid var(--ok); padding-left: 10px; }
+  textarea.fb {
+    width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 0.5rem; font: inherit; font-size: 1rem;
+    resize: vertical; min-height: 3rem; margin-top: 0.25rem;
+  }
+  .empty { color: var(--muted); padding: 2.5rem; text-align: center; }
+  .kv { display: grid; grid-template-columns: 5.625rem 1fr; gap: 0.25rem 0.625rem; font-size: 0.75rem; margin: 0.625rem 0 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .result { border-left: 3px solid var(--ok); padding-left: 0.625rem; }
+  .banner {
+    display: none; padding: 0.5rem 1rem; background: #4a1f1f; color: #f8dede;
+    border-bottom: 1px solid #7a3030; font-size: 0.75rem;
+  }
+  .banner.is-visible { display: block; }
 </style>
 </head>
 <body>
@@ -72,16 +122,23 @@
   <span class="badge" id="clock"></span>
 </header>
 
-<div id="banner" style="display:none;padding:8px 16px;background:#4a1f1f;color:#f8dede;border-bottom:1px solid #7a3030;font-size:12px"></div>
+<div id="banner" class="banner" role="alert"></div>
 <div class="layout">
-  <aside>
-    <div class="newrun">
-      <textarea id="task" placeholder="任务描述，例如：给 verify_graph.py 加 --verbose 参数"></textarea>
-      <input id="repo" placeholder="repo 路径（服务器上，默认 /opt/agent-workflows/demo-repo）" />
-      <input id="testcmd" placeholder="测试命令（在 repo 里执行，退出码 0 = 通过；可留空）" />
-      <button class="primary" style="width:100%" onclick="startRun()">启动工作流</button>
-    </div>
-    <div id="runs"></div>
+  <aside aria-label="运行控制与列表">
+    <form id="newRunForm" class="newrun" action="/api/runs" method="POST">
+      <label class="field-label" for="task">任务描述（必填）</label>
+      <textarea id="task" name="task" required aria-errormessage="taskError" placeholder="例如：给 verify_graph.py 加 --verbose 参数"></textarea>
+      <div id="taskError" class="error-msg"><span aria-hidden="true">⚠</span> 请填写任务描述</div>
+
+      <label class="field-label" for="repo">目标仓库路径（可选）</label>
+      <input id="repo" name="repo" type="text" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="默认使用服务器当前仓库路径" />
+
+      <label class="field-label" for="testcmd">测试命令（可选）</label>
+      <input id="testcmd" name="test_cmd" type="text" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="例如：pytest -q" />
+
+      <button type="submit" id="submitBtn" class="primary">启动工作流</button>
+    </form>
+    <div id="runs" role="region" aria-label="运行记录列表"></div>
   </aside>
 
   <main id="detail"><div class="empty">选择左侧的运行，或新建一个</div></main>
@@ -102,7 +159,7 @@ function badge(status) {
                 done: ["s-done", "已完成"], error: ["s-error", "出错"],
                 interrupted: ["s-error", "已中断"] };
   const [cls, label] = map[status] || ["s-running", status];
-  return `<span class="dot ${cls}"></span>${label}`;
+  return `<span class="dot ${cls}" aria-hidden="true"></span>${esc(label)}`;
 }
 
 function renderDiff(text) {
@@ -127,36 +184,63 @@ async function api(url, opts) {
 
 function banner(msg) {
   const el = $("banner");
-  if (!msg) { el.style.display = "none"; el.textContent = ""; return; }
-  el.style.display = "block";
+  if (!msg) { el.classList.remove("is-visible"); el.textContent = ""; return; }
+  el.classList.add("is-visible");
   el.textContent = msg;
 }
 
-async function startRun() {
+const syncAriaInvalid = (input) => {
+  if (!input.checkValidity()) {
+    input.setAttribute("aria-invalid", "true");
+  } else {
+    input.removeAttribute("aria-invalid");
+  }
+};
+
+const newRunForm = $("newRunForm");
+newRunForm.addEventListener("blur", (e) => {
+  if (e.target.matches("[required]")) syncAriaInvalid(e.target);
+}, true);
+newRunForm.addEventListener("input", (e) => {
+  if (e.target.matches("[required]") && e.target.checkValidity()) {
+    e.target.removeAttribute("aria-invalid");
+  }
+});
+
+newRunForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  newRunForm.querySelectorAll("[required]").forEach(syncAriaInvalid);
   banner("");
   const task = $("task").value.trim();
-  if (!task) { banner("请先填写任务描述"); return; }
+  if (!task) { banner("请先填写任务描述"); $("task").focus(); return; }
   const payload = { task, max_attempts: 2 };
   const repo = $("repo").value.trim();
   const testcmd = $("testcmd").value.trim();
   if (repo) payload.repo = repo;
   if (testcmd) payload.test_cmd = testcmd;
+  const submitBtn = $("submitBtn");
+  submitBtn.disabled = true;
   try {
     const r = await api("/api/runs", { method: "POST", headers: { "content-type": "application/json" },
                                        body: JSON.stringify(payload) });
     selected = r.thread_id;
     lastInterruptKey = null;
     $("task").value = "";
+    $("task").removeAttribute("aria-invalid");
     if ((r.warnings || []).length) banner("⚠ " + r.warnings.join("；"));
     await refresh();
-  } catch (e) { banner("启动失败: " + e.message); }
-}
+  } catch (err) {
+    banner("启动失败: " + err.message);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
 
 async function resume(action) {
   if (!selected) return;
   const fb = ($("feedback") ? $("feedback").value : "").trim();
   try {
-    await api(`/api/runs/${selected}/resume`, {
+    await api(`/api/runs/${encodeURIComponent(selected)}/resume`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action, feedback: fb }),
     });
@@ -171,15 +255,27 @@ function renderList(runs) {
   el.innerHTML = runs.map(r => {
     const v = r.values || {};
     const st = r.error ? "error" : r.status;
-    return `<div class="run ${r.thread_id === selected ? "active" : ""}" onclick="selectRun('${r.thread_id}')">
-      <div class="t">${badge(st)} ${esc(v.task || r.thread_id)}</div>
-      <div class="m"><span>${esc(r.thread_id)}</span>
-        <span>${r.status === "waiting" ? "等待人工审批" : (v.result ? "已结束" : "进行中")}</span></div>
-    </div>`;
+    return `<button type="button" class="run ${r.thread_id === selected ? "active" : ""}" data-thread-id="${esc(r.thread_id)}">
+      <span class="t">${badge(st)} ${esc(v.task || r.thread_id)}</span>
+      <span class="m"><span>${esc(r.thread_id)}</span>
+        <span>${r.status === "waiting" ? "等待人工审批" : (v.result ? "已结束" : "进行中")}</span></span>
+    </button>`;
   }).join("");
 }
 
-function selectRun(tid) { selected = tid; lastInterruptKey = null; refresh(); }
+$("runs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-thread-id]");
+  if (!btn) return;
+  selected = btn.dataset.threadId;
+  lastInterruptKey = null;
+  refresh();
+});
+
+$("detail").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-resume-action]");
+  if (!btn) return;
+  resume(btn.dataset.resumeAction);
+});
 
 function renderDetail(run) {
   if (!run || run.status === "unknown") {
@@ -189,54 +285,55 @@ function renderDetail(run) {
   const parts = [];
 
   parts.push(`<div class="card"><div class="row" style="justify-content:space-between">
-      <div><h2 style="margin:0 0 4px">${esc(v.task || "-")}</h2>
+      <div><h2>${esc(v.task || "-")}</h2>
       <div class="muted">${esc(run.thread_id)} · agent=${esc(run.source || "?")}</div></div>
       <div>${badge(run.status)}</div></div>
-      <div class="kv" style="margin-top:10px">
-        <div class="k">repo</div><div>${esc(v.repo || "-")}</div>
-        <div class="k">尝试次数</div><div>${esc(v.attempt ?? 0)} / ${esc(v.max_attempts ?? 2)}</div>
-      </div></div>`);
+      <dl class="kv">
+        <dt>repo</dt><dd>${esc(v.repo || "-")}</dd>
+        <dt>尝试次数</dt><dd>${esc(v.attempt ?? 0)} / ${esc(v.max_attempts ?? 2)}</dd>
+      </dl></div>`);
 
   // 待审
   for (const itr of (run.interrupts || [])) {
     const stage = itr.stage || "gate";
-    parts.push(`<div class="card" style="border-color:#4a3560">
+    parts.push(`<div class="card">
       <h2>待人工决策 · ${esc(stage)}</h2>`);
     if (itr.task) parts.push(`<div class="muted">任务：${esc(itr.task)}</div>`);
-    if (itr.plan) parts.push(`<pre>${esc(itr.plan)}</pre>`);
-    if (itr.patch) parts.push(`<div class="muted" style="margin-top:10px">改动 diff</div>
-      <pre class="diff">${renderDiff(itr.patch)}</pre>`);
-    if (itr.test_output) parts.push(`<div class="muted" style="margin-top:10px">测试输出</div>
-      <pre>${esc(itr.test_output)}</pre>`);
-    if (itr.review) parts.push(`<div class="muted" style="margin-top:10px">review</div>
-      <pre>${esc(itr.review)}</pre>`);
-    parts.push(`<textarea class="fb" id="feedback" placeholder="revise 时可填反馈（approve/abort 可留空）"></textarea>
-      <div class="row" style="margin-top:10px">
-        <button class="ok" onclick="resume('approve')">通过 approve</button>
-        <button class="warn" onclick="resume('revise')">打回 revise</button>
-        <button class="err" onclick="resume('abort')">中止 abort</button>
+    if (itr.plan) parts.push(`<pre tabindex="0"><code>${esc(itr.plan)}</code></pre>`);
+    if (itr.patch) parts.push(`<div class="muted">改动 diff</div>
+      <pre tabindex="0" class="diff"><code>${renderDiff(itr.patch)}</code></pre>`);
+    if (itr.test_output) parts.push(`<div class="muted">测试输出</div>
+      <pre tabindex="0"><code>${esc(itr.test_output)}</code></pre>`);
+    if (itr.review) parts.push(`<div class="muted">review</div>
+      <pre tabindex="0"><code>${esc(itr.review)}</code></pre>`);
+    parts.push(`<label class="field-label" for="feedback">审批反馈（打回修改时建议填写）</label>
+      <textarea class="fb" id="feedback" name="feedback" placeholder="approve / abort 可留空"></textarea>
+      <div class="row">
+        <button type="button" class="ok" data-resume-action="approve">通过 approve</button>
+        <button type="button" class="warn" data-resume-action="revise">打回 revise</button>
+        <button type="button" class="err" data-resume-action="abort">中止 abort</button>
       </div></div>`);
   }
 
   // 事件
   if ((v.events || []).length) {
-    parts.push(`<div class="card"><h2>事件</h2><div class="events">` +
+    parts.push(`<div class="card"><h2>事件</h2><ul class="events">` +
       v.events.map(e => {
         let cls = "ev";
         if (String(e).includes("gate")) cls += " gate";
         if (String(e).includes("fail")) cls += " fail";
         if (String(e).includes("pass") || String(e).includes(":ok")) cls += " pass";
-        return `<span class="${cls}">${esc(e)}</span>`;
-      }).join("") + `</div></div>`);
+        return `<li class="${cls}">${esc(e)}</li>`;
+      }).join("") + `</ul></div>`);
   }
 
   // 结果 / 错误
   if (v.result) parts.push(`<div class="card"><h2>结果</h2><div class="result">${esc(v.result)}</div></div>`);
-  if (run.error) parts.push(`<div class="card" style="border-color:#5c2f2f"><h2>错误</h2>
-    <pre>${esc(run.error)}</pre></div>`);
+  if (run.error) parts.push(`<div class="card" role="alert"><h2>错误</h2>
+    <pre tabindex="0"><code>${esc(run.error)}</code></pre></div>`);
 
   if (v.patch && !(run.interrupts || []).some(i => i.patch)) {
-    parts.push(`<div class="card"><h2>最近 diff</h2><pre class="diff">${renderDiff(v.patch)}</pre></div>`);
+    parts.push(`<div class="card"><h2>最近 diff</h2><pre tabindex="0" class="diff"><code>${renderDiff(v.patch)}</code></pre></div>`);
   }
 
   $("detail").innerHTML = parts.join("");
@@ -248,7 +345,7 @@ async function refresh() {
     $("agentBadge").textContent = "agent: " + health.agent;
     renderList(list.runs || []);
     if (selected) {
-      const run = await api("/api/runs/" + selected);
+      const run = await api("/api/runs/" + encodeURIComponent(selected));
       renderDetail(run);
     }
   } catch (e) {

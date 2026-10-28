@@ -80,6 +80,7 @@ export default function CloudConsole() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       void api.runs().then((result) => setRuns(result.runs)).catch(() => undefined)
+      void api.workflows().then((result) => setWorkflows(result.workflows)).catch(() => undefined)
       void api.health().then(setHealth).catch(() => setHealth(null))
     }, 2500)
     return () => window.clearInterval(timer)
@@ -144,7 +145,7 @@ export default function CloudConsole() {
     if (!currentWorkflow || !selectedRun || selectedRun.workflow_id !== currentWorkflow.id) return []
     if (selectedRun.status === 'done') return currentWorkflow.nodes.map((node) => node.id)
     const events = selectedRun.values?.events || []
-    return currentWorkflow.nodes.filter((node) => events.some((event) => event.includes(node.id))).map((node) => node.id)
+    return currentWorkflow.nodes.filter((node) => events.some((event) => event === node.id || event.startsWith(`${node.id}:`) || event.startsWith(`${node.id}#`))).map((node) => node.id)
   }, [currentWorkflow, selectedRun])
 
   const selectRun = (run: RunStateOut) => {

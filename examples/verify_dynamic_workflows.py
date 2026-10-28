@@ -29,6 +29,7 @@ from src.registry import (  # noqa: E402
     RouteRule,
     WorkflowRegistry,
     WorkflowSpec,
+    _render_template,
 )
 
 
@@ -74,11 +75,32 @@ def test_custom_workflow_and_fastapi() -> None:
 
     client = TestClient(app)
 
-    # 1) 初始应有 coding 工作流
+    # 1) 初始应有 coding 工作流，且响应头包含安全与隔离策略
     r0 = client.get("/api/workflows")
     assert r0.status_code == 200
+    assert r0.headers.get("x-content-type-options") == "nosniff"
+    assert r0.headers.get("x-frame-options") == "SAMEORIGIN"
+    assert r0.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+    assert "frame-ancestors 'self'" in (r0.headers.get("content-security-policy") or "")
     wf_ids = [w["id"] for w in r0.json()["workflows"]]
     assert "coding" in wf_ids
+
+    # 1b) Fetch Metadata 跨站非导航请求应被 403 拦截
+    r_cross = client.post(
+        "/api/runs",
+        json={"task": "cross-site attack"},
+        headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"},
+    )
+    assert r_cross.status_code == 403
+
+    # 1c) 模板渲染对 JSON 花括号与属性表达式安全
+    rendered = _render_template(
+        '输出 JSON {"ok": true}，任务={task}，忽略属性访问={task.__class__}',
+        {"task": "测试任务"},
+    )
+    assert '{"ok": true}' in rendered
+    assert "任务=测试任务" in rendered
+    assert "{task.__class__}" in rendered
 
     # 2) 模拟外部 Agent 通过 POST /api/workflows 注册一条新工作流 doc-review
     doc_wf = WorkflowSpec(

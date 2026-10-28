@@ -269,21 +269,24 @@ def default_coding_workflow_spec() -> WorkflowSpec:
 
 
 # ---------------------------------------------------------------- 动态构图辅助函数
-class _SafeFormatDict(dict):
-    """格式化模板时，缺失或为 None 的字段回退为默认值，避免 KeyError。"""
-
-    def __missing__(self, key: str) -> str:
-        return "无"
+_TEMPLATE_VAR_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 
 def _render_template(template: str, state: dict[str, Any], extra: Optional[dict[str, Any]] = None) -> str:
+    """安全渲染占位符模板：仅替换 {identifier} 变量，避免代码/JSON 花括号触发 ValueError 或属性越权访问。"""
     merged: dict[str, Any] = {}
     for k, v in state.items():
         merged[k] = "无" if v is None or v == "" else v
     if extra:
         for k, v in extra.items():
             merged[k] = "无" if v is None or v == "" else v
-    return template.format_map(_SafeFormatDict(merged))
+
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        val = merged.get(key, "无")
+        return "无" if val is None or val == "" else str(val)
+
+    return _TEMPLATE_VAR_RE.sub(_replace, template)
 
 
 def _git_diff(repo: str, limit: int = 20000) -> str:

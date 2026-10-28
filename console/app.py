@@ -15,9 +15,9 @@ import sqlite3
 import threading
 import time
 import traceback
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -52,17 +52,23 @@ _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 _checkpointer = SqliteSaver(_conn)
 _registry = WorkflowRegistry(WORKFLOWS_DIR)
 
-# 初始化 run_meta 表：记录每个 thread_id 对应的 workflow_id
-with _conn:
+# 初始化 run_meta 表：记录每个 thread_id 对应的 workflow_id 与持久化错误
+with _checkpointer.lock, _conn:
+    _conn.execute("PRAGMA journal_mode=WAL;")
     _conn.execute(
         """
         CREATE TABLE IF NOT EXISTS run_meta (
             thread_id TEXT PRIMARY KEY,
             workflow_id TEXT NOT NULL,
-            created_at REAL NOT NULL
+            created_at REAL NOT NULL,
+            error TEXT
         )
         """
     )
+    try:
+        _conn.execute("ALTER TABLE run_meta ADD COLUMN error TEXT")
+    except sqlite3.OperationalError:
+        pass
 
 _async_lock = threading.Lock()   # 串行化 invoke（SqliteSaver 单写者更稳）
 _errors: dict[str, str] = {}
@@ -77,13 +83,60 @@ app = FastAPI(
     ),
 )
 
+_DEFAULT_CORS_ORIGINS = (
+    "http://127.0.0.1:5173,http://localhost:5173,"
+    "http://127.0.0.1:8080,http://localhost:8080,"
+    "http://127.0.0.1:18080,http://localhost:18080"
+)
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("CONSOLE_CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip() and origin.strip() != "*"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next: Callable[[Request], Any]) -> Any:
+    """强制执行 Fetch Metadata 跨站资源隔离与现代 Web 安全/隐私响应头。"""
+    site = (request.headers.get("sec-fetch-site") or "").lower()
+    mode = (request.headers.get("sec-fetch-mode") or "").lower()
+    dest = (request.headers.get("sec-fetch-dest") or "").lower()
+    if site and site not in ("same-origin", "same-site", "none"):
+        is_safe_top_nav = (
+            site == "cross-site"
+            and mode == "navigate"
+            and request.method == "GET"
+            and dest not in ("object", "embed", "iframe", "frame")
+        )
+        if not is_safe_top_nav:
+            resp = JSONResponse({"error": "Forbidden cross-site request"}, status_code=403)
+            resp.headers["Vary"] = "Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site"
+            return resp
+
+    response = await call_next(request)
+    response.headers["Vary"] = "Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), geolocation=(), microphone=(), focus-without-user-activation=()",
+    )
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "base-uri 'none'; object-src 'none'; frame-ancestors 'self'",
+    )
+    return response
 
 
 def get_registry() -> WorkflowRegistry:
@@ -107,26 +160,48 @@ def _get_compiled_graph(workflow_id: str) -> Any:
 
 def _record_run_workflow(tid: str, workflow_id: str) -> None:
     try:
-        with _conn:
+        with _checkpointer.lock, _conn:
             _conn.execute(
-                "INSERT OR REPLACE INTO run_meta (thread_id, workflow_id, created_at) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO run_meta (thread_id, workflow_id, created_at, error) VALUES (?, ?, ?, NULL)",
                 (tid, workflow_id, time.time()),
             )
     except Exception:  # noqa: BLE001
         pass
 
 
-def _get_run_workflow_id(tid: str) -> str:
+def _set_run_error(tid: str, err: Optional[str]) -> None:
+    if err:
+        _errors[tid] = err
+    else:
+        _errors.pop(tid, None)
     try:
-        row = _conn.execute(
-            "SELECT workflow_id FROM run_meta WHERE thread_id = ?",
-            (tid,),
-        ).fetchone()
-        if row and row[0]:
-            return str(row[0])
+        with _checkpointer.lock, _conn:
+            _conn.execute(
+                "UPDATE run_meta SET error = ? WHERE thread_id = ?",
+                (err, tid),
+            )
     except Exception:  # noqa: BLE001
         pass
-    return "coding"
+
+
+def _get_run_meta(tid: str) -> tuple[str, Optional[str]]:
+    try:
+        with _checkpointer.lock:
+            row = _conn.execute(
+                "SELECT workflow_id, error FROM run_meta WHERE thread_id = ?",
+                (tid,),
+            ).fetchone()
+        if row:
+            wf_id = str(row[0]) if row[0] else "coding"
+            err = str(row[1]) if row[1] else _errors.get(tid)
+            return wf_id, err
+    except Exception:  # noqa: BLE001
+        pass
+    return "coding", _errors.get(tid)
+
+
+def _get_run_workflow_id(tid: str) -> str:
+    return _get_run_meta(tid)[0]
 
 
 def _tracing_callbacks(tid: str) -> list:
@@ -175,7 +250,7 @@ def _snapshot(tid: str, workflow_id: str) -> Optional[Any]:
 
 
 def _run_state(tid: str) -> dict:
-    workflow_id = _get_run_workflow_id(tid)
+    workflow_id, run_error = _get_run_meta(tid)
     snap = _snapshot(tid, workflow_id)
     if snap is None or (not snap.values and not snap.next and not snap.created_at):
         return {
@@ -188,7 +263,7 @@ def _run_state(tid: str) -> dict:
         }
 
     interrupts = [itr.value for itr in snap.interrupts]
-    if _errors.get(tid):
+    if run_error:
         status = "error"
     elif interrupts:
         status = "waiting"
@@ -206,17 +281,18 @@ def _run_state(tid: str) -> dict:
         "values": snap.values,
         "interrupts": interrupts,
         "created_at": snap.created_at,
-        "error": _errors.get(tid),
+        "error": run_error,
         "source": "codex" if AGENT_KIND == "codex" else "stub",
     }
 
 
 def _list_threads(limit: int = 50) -> list[str]:
     try:
-        rows = _conn.execute(
-            "select thread_id, max(rowid) as r from checkpoints group by thread_id order by r desc limit ?",
-            (limit,),
-        ).fetchall()
+        with _checkpointer.lock:
+            rows = _conn.execute(
+                "select thread_id, max(rowid) as r from checkpoints group by thread_id order by r desc limit ?",
+                (limit,),
+            ).fetchall()
         return [r[0] for r in rows]
     except Exception:  # noqa: BLE001
         return []
@@ -228,10 +304,11 @@ def _invoke(tid: str, workflow_id: str, payload: Any) -> None:
         graph = _get_compiled_graph(workflow_id)
         with _async_lock:
             graph.invoke(payload, _cfg(tid, workflow_id=workflow_id, traced=True))
-        _errors.pop(tid, None)
+        _set_run_error(tid, None)
     except Exception:  # noqa: BLE001
-        _errors[tid] = traceback.format_exc(limit=3)
-        print(f"[error] thread={tid} workflow={workflow_id}\n{_errors[tid]}", flush=True)
+        err_text = traceback.format_exc(limit=3)
+        _set_run_error(tid, err_text)
+        print(f"[error] thread={tid} workflow={workflow_id}\n{err_text}", flush=True)
     finally:
         _active.discard(tid)
         _flush_traces()
@@ -362,7 +439,22 @@ def start_run_service(
     if wf_spec is None:
         raise KeyError(f"工作流不存在: {workflow_id}")
 
-    target_repo = (repo or REPO_DEFAULT).strip()
+    raw_repo = (repo or REPO_DEFAULT).strip()
+    if "\x00" in raw_repo:
+        raise ValueError("repo 路径包含非法空字符")
+    target_repo = os.path.abspath(os.path.expanduser(raw_repo))
+    allowed_roots_env = os.environ.get("CONSOLE_ALLOWED_REPO_ROOTS", "").strip()
+    if allowed_roots_env:
+        allowed_roots = [
+            os.path.abspath(os.path.expanduser(p.strip()))
+            for p in allowed_roots_env.split(os.pathsep)
+            if p.strip()
+        ]
+        if allowed_roots and not any(
+            target_repo == root or target_repo.startswith(root + os.sep)
+            for root in allowed_roots
+        ):
+            raise ValueError(f"repo 路径不在允许的工作区目录范围内: {target_repo}")
     if not os.path.isdir(target_repo):
         raise ValueError(f"repo 不存在或不是目录: {target_repo}（请使用操作台服务器上的路径）")
 

@@ -59,6 +59,15 @@ try {
   await page.screenshot({ path: resolve(output, 'cloud-console.png'), fullPage: true })
   console.log('Initial console and dynamic workflow rendered')
 
+  const externalResponse = await fetch('http://127.0.0.1:18080/api/workflows', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...workflows.workflows[0], id: 'external_review', name: '外部 Agent 工作流', builtin: false }),
+  })
+  if (!externalResponse.ok) throw new Error(`External workflow creation failed: ${externalResponse.status}`)
+  await page.locator('.workflow-select option[value="external_review"]').waitFor({ state: 'attached', timeout: 10000 })
+  console.log('External workflow appeared through polling without reload')
+
   await page.getByRole('button', { name: '发起新运行' }).click()
   await page.getByLabel(/任务描述/).fill('联调测试：验证云流操作台')
   await page.getByRole('button', { name: '创建并运行' }).click()
