@@ -11,13 +11,20 @@ interface FlowCanvasProps {
   executedNodeIds?: string[]
 }
 
-const palette = { edge: '#b3b9df', bg: '#d4d8ed', node: '#ffffff', border: '#e1e4f2', text: '#464b70', active: '#7a82cf' }
+const palette = {
+  edge: 'var(--flow-edge)',
+  bg: 'var(--flow-grid)',
+  node: 'var(--flow-node-bg)',
+  border: 'var(--flow-node-border)',
+  text: 'var(--flow-node-text)',
+  active: 'var(--flow-node-active)',
+}
 
 function NodeIcon({ type }: { type: string }) {
-  if (type === 'gate') return <GitBranch size={14} />
-  if (type === 'shell') return <Terminal size={14} />
-  if (type === 'summary') return <CircleCheck size={14} />
-  return <Bot size={14} />
+  if (type === 'gate') return <GitBranch size={14} aria-hidden="true" />
+  if (type === 'shell') return <Terminal size={14} aria-hidden="true" />
+  if (type === 'summary') return <CircleCheck size={14} aria-hidden="true" />
+  return <Bot size={14} aria-hidden="true" />
 }
 
 function getPosition(node: NodeSpec, index: number) {
@@ -50,12 +57,11 @@ export default function FlowCanvas({ workflow, activeNodeIds = [], executedNodeI
       const style: CSSProperties = {
         width: 158,
         borderRadius: 16,
-        border: `1px solid ${active ? palette.active : completed ? '#a9c8b6' : palette.border}`,
-        background: completed ? '#f5faf7' : palette.node,
+        border: `1px solid ${active ? palette.active : completed ? 'var(--flow-node-complete)' : palette.border}`,
+        background: completed ? 'var(--flow-node-complete-bg)' : palette.node,
         color: palette.text,
-        boxShadow: active ? `0 7px 24px ${palette.active}30` : '0 3px 12px rgba(50, 60, 85, .04)',
+        boxShadow: active ? 'var(--flow-node-active-shadow)' : 'var(--flow-node-shadow)',
         padding: '12px 14px',
-        fontSize: 13,
         fontWeight: 600,
         textAlign: 'left',
       }
@@ -69,8 +75,8 @@ export default function FlowCanvas({ workflow, activeNodeIds = [], executedNodeI
             <div className="flow-node-label" title={node.description || node.label}>
               <span className={`flow-node-icon flow-node-icon--${node.kind}`}><NodeIcon type={node.kind} /></span>
               <span>{node.label}</span>
-              {completed && <Check size={13} className="ml-auto text-emerald-600" />}
-              {active && <Flag size={12} className="ml-auto text-indigo-400" />}
+              {completed && <Check size={13} className="ml-auto text-emerald-600" aria-hidden="true" />}
+              {active && <Flag size={12} className="ml-auto text-indigo-400" aria-hidden="true" />}
             </div>
           ),
         },
@@ -103,8 +109,8 @@ export default function FlowCanvas({ workflow, activeNodeIds = [], executedNodeI
         type: 'smoothstep',
         animated: activeNodeIds.includes(edge.source),
         style: { stroke: palette.edge, strokeWidth: 1.5, strokeDasharray: '5 5' },
-        labelStyle: { fill: '#9298b5', fontSize: 9 },
-        labelBgStyle: { fill: '#ffffff', fillOpacity: 0.85 },
+        labelStyle: { fill: 'var(--flow-edge-label)' },
+        labelBgStyle: { fill: 'var(--flow-edge-label-bg)', fillOpacity: 0.85 },
         labelBgPadding: [5, 3] as [number, number],
         markerEnd: { type: MarkerType.ArrowClosed, color: palette.edge, width: 14, height: 14 },
       }))

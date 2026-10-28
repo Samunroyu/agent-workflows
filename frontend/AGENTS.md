@@ -3,7 +3,7 @@
 本目录（`frontend/`）为 `agent-workflows` 操作台的前端工程，**100% 由 Kimi 负责编写与维护**。
 
 ## 1. 边界约束
-- **只允许在 `frontend/` 目录内读写文件**，严禁修改上级目录的 Python 后端代码（`../src/`、`../console/` 等）。
+- **只允许修改 `frontend/` 目录内的文件**；可只读 `../shared/openapi.json` 与项目规则文件，严禁修改上级目录的 Python 后端代码（`../src/`、`../console/` 等）。
 - **接口契约唯一来源**：请读取 `../shared/openapi.json` 获取所有后端 REST API 路径、请求参数与响应 Schema。不要猜测接口字段。
 
 ## 2. 技术选型要求
@@ -77,4 +77,50 @@
 - **禁止全局通配符重置**：避免在 `*` 上编写全局重置样式（如 `* { box-sizing: border-box; }`），应按具体元素或 `@layer` 分层声明。
 - **避免选择器过度匹配（Overmatching）**：按钮的 `:hover` 样式必须排除禁用态（使用 `button:hover:not(:disabled)`），防止禁用按钮在鼠标悬停时触发背景色或位移变化。
 - **使用 CSS 自定义属性（Design Tokens）传递动态状态**：避免在 JSX 中硬编码内联静态颜色对象（如 `style={{ color: '#...', background: '#...' }}`），优先通过 CSS 变量或语义类名驱动主题与状态色，并及时清理未使用的原型演示样式（如废弃的 `.demo-a` / `.demo-c`）。
+
+## 5. 当前前端工程待整改清单（供 Kimi 逐项修复）
+
+以下为基于 `modern-web-guidance` 对 `frontend/` 现有代码扫描出的具体不合规项，Kimi 在维护前端时需按此清单逐项完成整改：
+
+### 5.1 `frontend/index.html`
+- [x] **补充系统字号缩放 Meta 标签（`respect-os-text-scale`）**：在 `<head>` 中新增 `<meta name="text-scale" content="scale" />`。
+
+### 5.2 `frontend/src/CloudConsole.tsx`
+- [x] **新建运行弹窗改用原生 `<dialog>`（`dialog` / `light-dismiss-a-dialog`）**：
+  - 将 `<div className="modal-backdrop"> + <section className="run-modal" role="dialog" aria-modal="true">` 替换为 `<dialog ref={dialogRef} className="run-modal" closedby="any" aria-labelledby="new-run-title" onClose={() => setModalOpen(false)}>`。
+  - 通过 `dialogRef.current?.showModal()` / `dialogRef.current?.close()` 控制开关，移除手动监听 `Escape` 关闭弹窗的代码（浏览器原生处理 `Esc`、焦点陷阱、Top Layer 与背景 `inert`）。
+  - 增加 `if (!('closedBy' in HTMLDialogElement.prototype))` 的 `pointerdown` + `pointerup` 矩形边界检测回退以兼容 Safari。
+- [x] **表单控件补齐显式 `htmlFor`/`id`、`name` 与语义地标（`forms` / `accessibility`）**：
+  - 顶部搜索框外层使用 `<search>` 包裹，`<input type="search" id="run-search" name="q" autoCorrect="off" autoCapitalize="off" spellCheck={false} />` 并配对显式 `<label htmlFor="run-search">`。
+  - 审批区反馈输入框 `<textarea>` 必须补充显式 `<label htmlFor="approval-feedback">`（可使用 `.visually-hidden` 或可见标签）与 `name="feedback"`，严禁仅靠 `placeholder` 充当标签。
+  - 新建运行弹窗中的 `workflow_id`、`task`、`repo`、`test_cmd`、`max_attempts` 全部改为显式 `<label htmlFor="...">` + 对应 `id` 与 `name`；`repo` 与 `test_cmd` 补充 `autoCorrect="off" autoCapitalize="off" spellCheck={false}`。
+- [x] **移除禁用提交按钮阻止校验的反模式，接入 `:user-invalid` + `aria-invalid`（`required-field-feedback` / `forms`）**：
+  - 将提交按钮 `disabled={submitting || !form.task.trim()}` 改为 `disabled={submitting}`。
+  - 为必填项 `task` 添加错误提示节点（含图标与文字）和 `aria-errormessage`，并在 `onBlur` / `onInput` / `onSubmit` 中同步 `aria-invalid`。
+- [x] **补齐纯图标按钮的可访问名称（`accessibility` / `html`）**：
+  - 左侧导航栏 3 个图标按钮、顶部通知铃铛按钮、详情面板关闭按钮、弹窗关闭按钮、Toast 关闭按钮必须全部添加明确的 `aria-label`（不要仅依赖 `title`），且按钮内装饰性图标加上 `aria-hidden="true"`。
+- [x] **完善详情区 Tab 组件与代码块无障碍（`accessibility` / `html`）**：
+  - 为 `role="tab"` 按钮添加 `id` 与 `aria-controls`，支持左右方向键（`ArrowLeft` / `ArrowRight`）切换 Tab；为 `.detail-content` 面板添加 `role="tabpanel"` 与 `aria-labelledby`。
+  - 将 `DiffView` 及 `plan`/`test`/`review` 的 `<pre className="detail-code">` 补充 `tabIndex={0}`，且确保所有 `<pre>` 内部均包裹 `<code>` 元素。
+- [x] **动态错误与 Toast 通知语义化（`accessibility` / `persistent-toast-notifications`）**：
+  - 为 `.console-banner--error` 与 `.inline-error` 添加 `role="alert"`。
+  - 为 `.console-toast` 添加 `role="status"` / `aria-live="polite"`（或改造为 `popover="manual"` Top Layer 通知）。
+
+### 5.3 `frontend/src/components/Shared.tsx`
+- [x] **为交互组件补齐 `type="button"` 与 CSS 变量主题（`html` / `css`）**：
+  - `RunRow` 的 `<button>` 显式声明 `type="button"`。
+  - `StatusBadge` 避免直接内联静态颜色对象，改为通过 CSS 自定义属性（如 `style={{ '--badge-color': meta.color, '--badge-bg': meta.bg } as CSSProperties}`）或状态修饰类名驱动样式；加载状态图标配合无障碍状态文本与减缓动画支持。
+
+### 5.4 `frontend/src/styles.css`
+- [x] **移除全局 `*` 重置与废代码（`css`）**：
+  - 移除 `* { box-sizing: border-box; }` 全局通配重置，清理未使用的 `.preview-*`、`.demo-a`、`.demo-c` 冗余样式。
+- [x] **原生 `<dialog>` 滚动锁定样式（`prevent-page-scroll-under-modal-dialog`）**：
+  - 新增 `dialog:modal { overscroll-behavior: contain; }` 与 `dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }`。
+- [x] **全量字号由 `px` 迁移为 `rem` 并修正行高与表单字号（`typography` / `respect-os-text-scale` / `forms`）**：
+  - 将所有 `font-size: ...px`（特别是 `7px`–`10px` 的过小字号）替换为合理的 `rem` 相对单位；确保表单 `input`/`textarea`/`select` 字号不少于 `1rem`（防止移动端聚焦自动放大）。
+  - 移除 `.approval-controls textarea` 的 `resize: none`，改为 `resize: vertical`。
+  - 移除移动端 `@media (max-width: 640px)` 下 `.b-new-run { font-size: 0; }` 的写法，改用标准 `.visually-hidden` 工具类隐藏按钮文字。
+- [x] **修复按钮悬停选择器过度匹配与动效偏好（`css` / `accessibility` / `spinner`）**：
+  - 将 `.b-new-run:hover`、`.b-approve:hover` 等按钮悬停规则改为 `:hover:not(:disabled)`。
+  - 新增 `@media (prefers-reduced-motion: reduce)` 规则，减缓 `.animate-spin` 等旋转与位移动画。
 

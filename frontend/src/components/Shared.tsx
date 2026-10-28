@@ -1,4 +1,5 @@
 import { ChevronRight, LoaderCircle } from 'lucide-react'
+import type { CSSProperties } from 'react'
 import type { RunStateOut, RunStatus } from '../types'
 import { formatRelativeTime, runTask } from '../format'
 
@@ -13,9 +14,10 @@ export const statusMeta: Record<RunStatus, { label: string; color: string; bg: s
 
 export function StatusBadge({ status, subtle = false }: { status: RunStatus; subtle?: boolean }) {
   const meta = statusMeta[status]
+  const badgeStyle = { '--badge-color': meta.color, '--badge-bg': meta.bg } as CSSProperties
   return (
-    <span className={`status-badge ${subtle ? 'status-badge--subtle' : ''}`} style={{ color: meta.color, background: meta.bg }}>
-      {status === 'running' ? <LoaderCircle size={11} className="animate-spin" /> : <i style={{ background: meta.color }} />}
+    <span className={`status-badge ${subtle ? 'status-badge--subtle' : ''}`} style={badgeStyle}>
+      {status === 'running' ? <LoaderCircle size={11} className="animate-spin" aria-hidden="true" /> : <i aria-hidden="true" />}
       {meta.label}
     </span>
   )
@@ -23,11 +25,11 @@ export function StatusBadge({ status, subtle = false }: { status: RunStatus; sub
 
 export function RunRow({ run, selected, onClick }: { run: RunStateOut; selected: boolean; onClick: () => void }) {
   return (
-    <button className={`run-row run-row--b ${selected ? 'is-selected' : ''}`} onClick={onClick}>
+    <button type="button" className={`run-row run-row--b ${selected ? 'is-selected' : ''}`} onClick={onClick}>
       <span className="run-row__top"><StatusBadge status={run.status} subtle /><small>{formatRelativeTime(run.created_at)}</small></span>
       <strong>{runTask(run)}</strong>
       <span className="run-row__meta"><span>{run.workflow_id || 'coding'}</span><span>·</span><span>{run.thread_id.slice(0, 14)}</span></span>
-      <ChevronRight className="run-row__arrow" size={15} />
+      <ChevronRight className="run-row__arrow" size={15} aria-hidden="true" />
     </button>
   )
 }

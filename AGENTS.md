@@ -8,7 +8,7 @@
 |---|---|---|
 | `frontend/` | **仅限 Kimi (`kimi`)** | 前端工程（React + TypeScript + Vite + Tailwind CSS + React Flow）。**除 Kimi 外的任何后端/通用 Agent 严禁创建或修改 `frontend/` 下的代码文件**（仅允许读取或配置规则说明）。 |
 | `src/`、`console/`、`scripts/`、`deploy/`、`examples/` | **后端 Agent（Codex / Claude Code / Antigravity）** | Python 后端与 LangGraph 编排引擎。**Kimi 严禁修改任何后端 Python 代码**。 |
-| `shared/openapi.json` | **后端导出 / 前端只读** | 前后端唯一接口契约。后端修改 `console/app.py` 的接口或 Pydantic 模型后，必须执行 `python scripts/export_openapi.py` 更新此文件；前端 Kimi 仅读取此文件对齐类型与接口。 |
+| `shared/openapi.json` | **后端导出 / 前端只读** | 前后端唯一接口契约。后端修改 `console/app.py` 的接口或 Pydantic 模型后，必须执行 `.venv/bin/python scripts/export_openapi.py` 更新此文件；前端 Kimi 仅读取此文件对齐类型与接口。 |
 
 ## 2. 后端 Python 环境管理规范（硬性规定：使用 `uv`）
 
