@@ -2,13 +2,13 @@
   "openapi": "3.1.0",
   "info": {
     "title": "agent-workflows console API",
-    "description": "操作台后端 API：提供工作流定义管理（/api/workflows）、运行列表、启动、详情查询与人工审批（interrupt/resume）接口。前后端唯一契约文件位于 shared/openapi.json。",
-    "version": "0.3.0"
+    "description": "多 Agent 研发协同编排操作台后端 API v2：提供 CLI Agent 管理（/api/agents）、Worker 节点状态（/api/workers）、工作流可视化拓扑增删改与自然语言改图（/api/workflows, /api/workflows/copilot）、以及运行期实时日志流、强杀中止、单节点重试与增强人工卡点（/api/runs/*）。前后端唯一契约文件位于 shared/openapi.json。",
+    "version": "2.0.0"
   },
   "paths": {
     "/api/health": {
       "get": {
-        "summary": "Health",
+        "summary": "服务健康检查与本机可用 CLI Agent 探测摘要",
         "operationId": "health_api_health_get",
         "responses": {
           "200": {
@@ -24,9 +24,150 @@
         }
       }
     },
+    "/api/agents": {
+      "get": {
+        "summary": "列出所有内置与自定义 CLI Agent 及其本机安装就绪状态",
+        "operationId": "list_agents_api_agents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentListOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "新增或修改 CLI Agent 配置（如添加自定义 CLI 模板或指定二进制绝对路径）",
+        "operationId": "save_agent_api_agents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentProfileSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProfileOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents/{agent_id}": {
+      "delete": {
+        "summary": "删除自定义 CLI Agent（或将已覆盖的内置预设恢复为默认值）",
+        "operationId": "delete_agent_api_agents__agent_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAgentOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workers": {
+      "get": {
+        "summary": "列出可用执行主机 Worker（一期提供本机 local，二期支持多主机轻量守护进程接入）",
+        "operationId": "list_workers_api_workers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerListOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workflows": {
       "get": {
-        "summary": "列出所有工作流定义（含节点与连线拓扑）",
+        "summary": "列出所有工作流定义（全部支持可视化增删节点与自定义编辑）",
         "operationId": "list_workflows_api_workflows_get",
         "responses": {
           "200": {
@@ -42,7 +183,7 @@
         }
       },
       "post": {
-        "summary": "创建或更新工作流定义（外部 Agent 或前端可调用，落盘后 Web 立即可见）",
+        "summary": "创建或保存工作流定义（支持新建、复制、增删节点、修改连线与启动参数）",
         "operationId": "save_workflow_api_workflows_post",
         "requestBody": {
           "content": {
@@ -67,6 +208,102 @@
           },
           "400": {
             "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/validate": {
+      "post": {
+        "summary": "校验画布工作流拓扑合法性并返回各节点可引用的上游节点映射",
+        "operationId": "validate_workflow_api_workflows_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateWorkflowOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/copilot": {
+      "post": {
+        "summary": "一句话自然语言生成新工作流或修改当前画布工作流（直接复用本机已登录 CLI Agent）",
+        "operationId": "workflow_copilot_api_workflows_copilot_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopilotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CopilotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -136,8 +373,65 @@
           }
         }
       },
+      "put": {
+        "summary": "按指定 workflow_id 更新工作流定义",
+        "operationId": "update_workflow_api_workflows__workflow_id__put",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSpec"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSpec"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
-        "summary": "删除自定义工作流（内置 coding 工作流不可删除）",
+        "summary": "删除指定工作流",
         "operationId": "delete_workflow_api_workflows__workflow_id__delete",
         "parameters": [
           {
@@ -160,16 +454,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Bad Request"
           },
           "404": {
             "content": {
@@ -196,7 +480,7 @@
     },
     "/api/runs": {
       "get": {
-        "summary": "List Runs",
+        "summary": "列出最近的工作流运行记录",
         "operationId": "list_runs_api_runs_get",
         "responses": {
           "200": {
@@ -212,7 +496,7 @@
         }
       },
       "post": {
-        "summary": "Start Run",
+        "summary": "按指定工作流与动态入参启动一次运行",
         "operationId": "start_run_api_runs_post",
         "requestBody": {
           "content": {
@@ -270,7 +554,7 @@
     },
     "/api/runs/{tid}": {
       "get": {
-        "summary": "Get Run",
+        "summary": "查询单次运行的完整状态、活跃并行节点、各节点产出/Diff 与待审批卡点载荷",
         "operationId": "get_run_api_runs__tid__get",
         "parameters": [
           {
@@ -317,9 +601,143 @@
         }
       }
     },
+    "/api/runs/{tid}/logs": {
+      "get": {
+        "summary": "增量获取运行实时日志（支持按 node_id 过滤单节点 CLI 输出，用 after_seq 无损拉取新行）",
+        "operationId": "get_run_logs_api_runs__tid__logs_get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "可选：仅筛选某个节点的日志",
+              "title": "Node Id"
+            },
+            "description": "可选：仅筛选某个节点的日志"
+          },
+          {
+            "name": "after_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "上次获取到的最大 seq，返回 seq > after_seq 的增量日志",
+              "default": 0,
+              "title": "After Seq"
+            },
+            "description": "上次获取到的最大 seq，返回 seq > after_seq 的增量日志"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5000,
+              "minimum": 1,
+              "description": "单次最多返回条数",
+              "default": 1000,
+              "title": "Limit"
+            },
+            "description": "单次最多返回条数"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunLogsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{tid}/stream": {
+      "get": {
+        "summary": "SSE 实时流式订阅某次运行的 CLI 输出日志与状态变更（text/event-stream）",
+        "operationId": "stream_run_events_api_runs__tid__stream_get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "after_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "起始日志序号游标",
+              "default": 0,
+              "title": "After Seq"
+            },
+            "description": "起始日志序号游标"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{tid}/resume": {
       "post": {
-        "summary": "Resume Run",
+        "summary": "人工卡点决策：支持直接放行、在线修改上游节点产出后放行、自选打回到任意上游节点、或中止",
         "operationId": "resume_run_api_runs__tid__resume_post",
         "parameters": [
           {
@@ -376,10 +794,137 @@
         }
       }
     },
+    "/api/runs/{tid}/cancel": {
+      "post": {
+        "summary": "强杀中止当前正在执行的 CLI/Shell 子进程组并暂停运行（保留断点供随时重试）",
+        "operationId": "cancel_run_api_runs__tid__cancel_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRunOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{tid}/retry": {
+      "post": {
+        "summary": "从报错、被强杀或中断的节点原地重试（支持临时覆盖 Prompt / 命令 / Agent / 目录）",
+        "operationId": "retry_run_api_runs__tid__retry_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryRunIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryRunOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/debug/threads": {
       "get": {
         "summary": "Debug Threads",
-        "description": "排查用：直接看 checkpoint 里有哪些 thread。",
         "operationId": "debug_threads_api_debug_threads_get",
         "responses": {
           "200": {
@@ -398,6 +943,333 @@
   },
   "components": {
     "schemas": {
+      "AgentListOut": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentProfileOut"
+            },
+            "type": "array",
+            "title": "Agents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agents"
+        ],
+        "title": "AgentListOut"
+      },
+      "AgentProfileOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Id",
+            "description": "Agent 唯一标识，如 codex / claude / kimi / my-cli"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "显示名称，如 Codex CLI / Claude Code / Kimi CLI"
+          },
+          "driver": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "kimi",
+              "gemini",
+              "custom"
+            ],
+            "title": "Driver",
+            "description": "驱动类型：codex | claude | kimi | gemini | custom（自定义命令模板）",
+            "default": "custom"
+          },
+          "binary": {
+            "type": "string",
+            "title": "Binary",
+            "description": "可执行文件名称或绝对路径，如 codex / claude / kimi"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "Agent 用途与特性说明",
+            "default": ""
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model",
+            "description": "可选模型覆盖参数（传给 CLI 的 -m / --model）"
+          },
+          "args_template": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args Template",
+            "description": "自定义参数列表模板（driver='custom' 时必填；内置驱动留空则使用官方非交互预设）。支持占位符：{prompt}、{prompt_file}、{cwd}、{sandbox}、{output_file}、{model}"
+          },
+          "command_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Template",
+            "description": "可选单行 Shell 命令模板（仅 driver='custom' 且未填 args_template 时使用）"
+          },
+          "timeout_sec": {
+            "type": "integer",
+            "maximum": 14400.0,
+            "minimum": 10.0,
+            "title": "Timeout Sec",
+            "description": "单次执行超时秒数",
+            "default": 1800
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env",
+            "description": "附加环境变量（键值对）"
+          },
+          "builtin": {
+            "type": "boolean",
+            "title": "Builtin",
+            "description": "是否为系统内置预设",
+            "default": false
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "description": "当前主机是否已安装并可调用该 CLI 二进制",
+            "default": false
+          },
+          "resolved_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Path",
+            "description": "探测到的二进制绝对路径"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "binary"
+        ],
+        "title": "AgentProfileOut",
+        "description": "带实时本机可用性探测状态的 Agent 信息。"
+      },
+      "AgentProfileSpec": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Id",
+            "description": "Agent 唯一标识，如 codex / claude / kimi / my-cli"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "显示名称，如 Codex CLI / Claude Code / Kimi CLI"
+          },
+          "driver": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "kimi",
+              "gemini",
+              "custom"
+            ],
+            "title": "Driver",
+            "description": "驱动类型：codex | claude | kimi | gemini | custom（自定义命令模板）",
+            "default": "custom"
+          },
+          "binary": {
+            "type": "string",
+            "title": "Binary",
+            "description": "可执行文件名称或绝对路径，如 codex / claude / kimi"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "Agent 用途与特性说明",
+            "default": ""
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model",
+            "description": "可选模型覆盖参数（传给 CLI 的 -m / --model）"
+          },
+          "args_template": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args Template",
+            "description": "自定义参数列表模板（driver='custom' 时必填；内置驱动留空则使用官方非交互预设）。支持占位符：{prompt}、{prompt_file}、{cwd}、{sandbox}、{output_file}、{model}"
+          },
+          "command_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Template",
+            "description": "可选单行 Shell 命令模板（仅 driver='custom' 且未填 args_template 时使用）"
+          },
+          "timeout_sec": {
+            "type": "integer",
+            "maximum": 14400.0,
+            "minimum": 10.0,
+            "title": "Timeout Sec",
+            "description": "单次执行超时秒数",
+            "default": 1800
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env",
+            "description": "附加环境变量（键值对）"
+          },
+          "builtin": {
+            "type": "boolean",
+            "title": "Builtin",
+            "description": "是否为系统内置预设",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "binary"
+        ],
+        "title": "AgentProfileSpec",
+        "description": "可持久化的 CLI Agent 配置定义。"
+      },
+      "CancelRunOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "killed_processes": {
+            "type": "integer",
+            "title": "Killed Processes",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "thread_id"
+        ],
+        "title": "CancelRunOut"
+      },
+      "CopilotRequest": {
+        "properties": {
+          "instruction": {
+            "type": "string",
+            "minLength": 2,
+            "title": "Instruction",
+            "description": "自然语言生成或修改指令，例如：『在测试节点后加一个 Claude 代码审查节点，再连到最终审批』"
+          },
+          "current_workflow": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowSpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "当前画布正在编辑的工作流定义（传入则在原图基础上增量修改；不传则从零生成新工作流）"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "description": "用于执行构图的本地 CLI Agent ID（默认 'auto' 自动选择当前在线的首个 CLI）",
+            "default": "auto"
+          },
+          "auto_save": {
+            "type": "boolean",
+            "title": "Auto Save",
+            "description": "生成并校验通过后是否立即落盘保存（默认 false，先返回给前端画布预览，用户确认后点保存）",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "instruction"
+        ],
+        "title": "CopilotRequest"
+      },
+      "CopilotResponse": {
+        "properties": {
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowSpec"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "本次拓扑生成或修改的简明摘要"
+          },
+          "agent_used": {
+            "type": "string",
+            "title": "Agent Used",
+            "description": "实际调用的本地 CLI Agent ID"
+          },
+          "saved": {
+            "type": "boolean",
+            "title": "Saved",
+            "description": "是否已落盘保存",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "workflow",
+          "summary",
+          "agent_used"
+        ],
+        "title": "CopilotResponse"
+      },
       "DebugThreadsOut": {
         "properties": {
           "threads": {
@@ -413,6 +1285,24 @@
           "threads"
         ],
         "title": "DebugThreadsOut"
+      },
+      "DeleteAgentOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "agent_id"
+        ],
+        "title": "DeleteAgentOut"
       },
       "DeleteWorkflowOut": {
         "properties": {
@@ -432,8 +1322,76 @@
         ],
         "title": "DeleteWorkflowOut"
       },
+      "EdgeCondition": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field",
+            "description": "要判断的变量路径，支持 '节点ID.ok'、'节点ID.exit_code'、'节点ID.output'、'节点ID.runs'、'inputs.变量名'"
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "==",
+              "!=",
+              ">=",
+              "<=",
+              ">",
+              "<",
+              "contains",
+              "not_contains",
+              "regex",
+              "truthy",
+              "falsy"
+            ],
+            "title": "Op",
+            "description": "运算符：== | != | >= | <= | > | < | contains | not_contains | regex | truthy | falsy",
+            "default": "=="
+          },
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "比较常量值（如 true、0、'PASS'）"
+          },
+          "value_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Ref",
+            "description": "可选：引用另一个变量路径进行动态比较"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "title": "EdgeCondition",
+        "description": "绑定在单条连线上的条件表达式（画布上 1 条边对应 1 个条件，直观易编辑）。"
+      },
       "EdgeSpec": {
         "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "连线唯一 ID（供前端画布选中/编辑/删除单条连线）"
+          },
           "source": {
             "type": "string",
             "title": "Source",
@@ -449,27 +1407,7 @@
               }
             ],
             "title": "Target",
-            "description": "直接连线的目标节点 ID（或 'END'）；若为条件边则留空"
-          },
-          "conditions": {
-            "items": {
-              "$ref": "#/components/schemas/RouteRule"
-            },
-            "type": "array",
-            "title": "Conditions",
-            "description": "条件路由规则列表（按顺序匹配，首个命中的规则生效）"
-          },
-          "default_target": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Target",
-            "description": "条件边所有规则均未命中时的兜底目标节点 ID（或 'END'）"
+            "description": "目标节点 ID（或 'END'）"
           },
           "label": {
             "anyOf": [
@@ -481,7 +1419,44 @@
               }
             ],
             "title": "Label",
-            "description": "普通边在画布上的连线标签"
+            "description": "连线显示标签"
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EdgeCondition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "单边条件规则（当起始节点为 condition 或带条件分支时生效）"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default",
+            "description": "是否为条件分支的兜底（else / default）连线",
+            "default": false
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/RouteRule"
+            },
+            "type": "array",
+            "title": "Conditions",
+            "description": "（兼容聚合写法）多分支条件路由列表"
+          },
+          "default_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Target",
+            "description": "（兼容聚合写法）所有条件未命中时的兜底目标节点 ID"
           }
         },
         "type": "object",
@@ -524,18 +1499,65 @@
           },
           "agent": {
             "type": "string",
-            "title": "Agent"
+            "title": "Agent",
+            "description": "当前主机在线的 CLI Agent 摘要（如 'codex' 或 'codex,claude'；均未安装时为 'none'）"
+          },
+          "online_agents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Online Agents",
+            "description": "当前就绪可调用的 CLI Agent ID 列表"
+          },
+          "workers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Workers",
+            "description": "当前在线的 Worker 主机 ID 列表"
+          },
+          "default_repo": {
+            "type": "string",
+            "title": "Default Repo",
+            "description": "操作台默认工作区路径"
           }
         },
         "type": "object",
         "required": [
           "ok",
-          "agent"
+          "agent",
+          "default_repo"
         ],
         "title": "HealthOut"
       },
       "InterruptPayload": {
         "properties": {
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id",
+            "description": "当前停靠的 Gate 节点 ID"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "当前 Gate 节点名称"
+          },
           "stage": {
             "anyOf": [
               {
@@ -546,9 +1568,9 @@
               }
             ],
             "title": "Stage",
-            "description": "审批阶段：plan_approval | final_approval 等"
+            "description": "卡点阶段标识"
           },
-          "task": {
+          "instruction": {
             "anyOf": [
               {
                 "type": "string"
@@ -557,51 +1579,30 @@
                 "type": "null"
               }
             ],
-            "title": "Task"
+            "title": "Instruction",
+            "description": "审批说明"
           },
-          "plan": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plan"
+          "allow_edit_output": {
+            "type": "boolean",
+            "title": "Allow Edit Output",
+            "description": "是否允许在线直接编辑 upstream_outputs 中的 output 文本",
+            "default": true
           },
-          "patch": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Patch"
+          "upstream_outputs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/UpstreamSnapshotOut"
+            },
+            "type": "object",
+            "title": "Upstream Outputs",
+            "description": "供审批人审阅（及在线编辑）的上游节点产出与 Git Diff 映射"
           },
-          "test_output": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Test Output"
-          },
-          "review": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Review"
+          "rewind_options": {
+            "items": {
+              "$ref": "#/components/schemas/RewindOptionOut"
+            },
+            "type": "array",
+            "title": "Rewind Options",
+            "description": "点击『打回』时允许选择回退的目标上游节点列表"
           },
           "options": {
             "items": {
@@ -614,6 +1615,190 @@
         "additionalProperties": true,
         "type": "object",
         "title": "InterruptPayload"
+      },
+      "NodeExecutionOut": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "description": "running | succeeded | failed | cancelled | approve | revise | abort"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output",
+            "description": "节点主产出文本（对应模板变量 {node_id.output}）"
+          },
+          "stdout": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stdout",
+            "description": "完整标准输出文本（对应模板变量 {node_id.stdout}）"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff",
+            "description": "工作区 Git Diff（对应模板变量 {node_id.diff}）"
+          },
+          "runs": {
+            "type": "integer",
+            "title": "Runs",
+            "description": "该节点在本次运行中已执行的次数",
+            "default": 1
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "edited_by_human": {
+            "type": "boolean",
+            "title": "Edited By Human",
+            "description": "该节点产出是否已被人工在卡点在线修订过",
+            "default": false
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "node_id"
+        ],
+        "title": "NodeExecutionOut"
       },
       "NodePosition": {
         "properties": {
@@ -635,24 +1820,26 @@
         "properties": {
           "id": {
             "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$",
             "title": "Id",
-            "description": "节点唯一标识（图内唯一，不可为 START/END）"
+            "description": "节点唯一 ID（不可为 START/END）"
           },
           "label": {
             "type": "string",
             "title": "Label",
-            "description": "节点显示名称（供 Web 画布展示）"
+            "description": "节点显示名称"
           },
           "kind": {
             "type": "string",
             "enum": [
               "agent",
-              "gate",
               "shell",
+              "gate",
+              "condition",
               "summary"
             ],
             "title": "Kind",
-            "description": "节点类型：agent | gate | shell | summary"
+            "description": "节点类型：agent | shell | gate | condition"
           },
           "description": {
             "anyOf": [
@@ -664,7 +1851,7 @@
               }
             ],
             "title": "Description",
-            "description": "节点职责说明"
+            "description": "节点职责备注"
           },
           "position": {
             "anyOf": [
@@ -675,7 +1862,64 @@
                 "type": "null"
               }
             ],
-            "description": "前端画布坐标（可选，未传时前端自动布局）"
+            "description": "画布坐标"
+          },
+          "join_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "all",
+              "any"
+            ],
+            "title": "Join Mode",
+            "description": "多入边汇聚策略：auto（自动识别并行汇聚）| all（等待所有并行前置完成）| any（任一前置到达即执行）",
+            "default": "auto"
+          },
+          "worker_id": {
+            "type": "string",
+            "title": "Worker Id",
+            "description": "执行主机 Worker ID（默认 'local' 表示操作台所在机器）",
+            "default": "local"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd",
+            "description": "节点工作目录（支持绝对路径、相对工作区子目录如 'frontend'，或模板变量如 '{inputs.repo}'；留空使用运行默认仓库目录）"
+          },
+          "use_worktree": {
+            "type": "boolean",
+            "title": "Use Worktree",
+            "description": "是否启用独立 Git Worktree 隔离（二期能力预留）",
+            "default": false
+          },
+          "max_runs": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Max Runs",
+            "description": "单次运行内该节点自动循环上限（防死循环保护）",
+            "default": 8
+          },
+          "timeout_sec": {
+            "type": "integer",
+            "maximum": 14400.0,
+            "minimum": 5.0,
+            "title": "Timeout Sec",
+            "description": "节点单次执行超时秒数",
+            "default": 1800
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "description": "要调用的 CLI Agent ID（如 'codex' / 'claude' / 'kimi' / 'gemini' / 自定义 ID；'auto' 自动选用首个就绪 CLI）",
+            "default": "auto"
           },
           "prompt_template": {
             "anyOf": [
@@ -687,7 +1931,7 @@
               }
             ],
             "title": "Prompt Template",
-            "description": "agent 节点的提示词模板，支持 {task}、{plan}、{patch}、{feedback}、{test_output}、{attempt} 等 state 变量占位符"
+            "description": "发给 CLI Agent 的提示词模板，支持 {task}、{inputs.xxx}、{上游节点ID.output}、{上游节点ID.diff}、{feedback}"
           },
           "sandbox": {
             "type": "string",
@@ -696,28 +1940,16 @@
               "workspace-write"
             ],
             "title": "Sandbox",
-            "description": "agent 执行沙箱权限：read-only（只读分析）| workspace-write（允许修改代码）",
-            "default": "read-only"
-          },
-          "output_key": {
-            "type": "string",
-            "title": "Output Key",
-            "description": "节点输出写入 state 的字段名（如 plan / patch / review / test_output）",
-            "default": "plan"
+            "description": "CLI 沙箱权限：read-only（只读分析/规划/审查）| workspace-write（允许读写代码文件）",
+            "default": "workspace-write"
           },
           "capture_git_diff": {
             "type": "boolean",
             "title": "Capture Git Diff",
-            "description": "是否在 agent 执行后抓取 repo 的 git diff 作为 output_key 的值（常用于 implement 节点）",
-            "default": false
+            "description": "执行后是否抓取工作目录的 git diff 存入 {节点ID.diff}",
+            "default": true
           },
-          "increment_attempt": {
-            "type": "boolean",
-            "title": "Increment Attempt",
-            "description": "进入节点时是否将 state['attempt'] + 1",
-            "default": false
-          },
-          "event_template": {
+          "command": {
             "anyOf": [
               {
                 "type": "string"
@@ -726,38 +1958,22 @@
                 "type": "null"
               }
             ],
-            "title": "Event Template",
-            "description": "写入 events 列表的日志模板，支持 {id}、{attempt}、{ok_or_ng}、{pass_or_fail}、{action}"
+            "title": "Command",
+            "description": "Shell 命令模板，支持 {task}、{inputs.xxx}、{上游节点ID.output} 等变量替换"
+          },
+          "continue_on_error": {
+            "type": "boolean",
+            "title": "Continue On Error",
+            "description": "退出码非 0 时是否继续流转（当下游连向 condition 节点时会自动允许流转以进入判断分支；独立命令失败则默认停住等待人工重试）",
+            "default": false
           },
           "stage": {
             "type": "string",
             "title": "Stage",
-            "description": "人审阶段标识，如 plan_approval / final_approval",
+            "description": "卡点阶段标识",
             "default": "approval"
           },
-          "expose_keys": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Expose Keys",
-            "description": "interrupt 时暴露给前端审批卡片展示的 state 字段列表"
-          },
-          "options": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Options",
-            "description": "允许的人工审批动作列表"
-          },
-          "cmd_key": {
-            "type": "string",
-            "title": "Cmd Key",
-            "description": "从 state 中读取要执行的 shell 命令字段名",
-            "default": "test_cmd"
-          },
-          "default_cmd": {
+          "instruction": {
             "anyOf": [
               {
                 "type": "string"
@@ -766,26 +1982,42 @@
                 "type": "null"
               }
             ],
-            "title": "Default Cmd",
-            "description": "当 state[cmd_key] 为空时使用的默认命令"
+            "title": "Instruction",
+            "description": "展示给审批人的提示说明（支持模板变量）"
           },
-          "fallback_prompt_template": {
-            "type": "string",
-            "title": "Fallback Prompt Template",
-            "description": "未配置 shell 命令时回退调用 agent 的 prompt 模板",
-            "default": "TEST: 运行测试（第 {attempt} 次）"
+          "review_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Review Nodes",
+            "description": "在审批卡片中重点展示产出的上游节点 ID 列表（留空则自动展示直接上游节点）"
           },
-          "passed_key": {
-            "type": "string",
-            "title": "Passed Key",
-            "description": "命令是否成功（退出码 0）写入 state 的布尔字段名",
-            "default": "passed"
+          "allow_edit_output": {
+            "type": "boolean",
+            "title": "Allow Edit Output",
+            "description": "是否允许审批人直接在线编辑修改上游节点的 output 文本后再放行",
+            "default": true
+          },
+          "rewind_targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rewind Targets",
+            "description": "点击『打回』时可选的目标上游节点 ID 列表（留空则自动计算全部上游祖先节点供选择）"
           },
           "result_template": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Result Template",
-            "description": "终态汇总写入 state['result'] 的文本模板",
-            "default": "完成：{task}"
+            "description": "（兼容 summary 节点）汇总输出模板"
           },
           "abort_result_template": {
             "anyOf": [
@@ -797,7 +2029,59 @@
               }
             ],
             "title": "Abort Result Template",
-            "description": "当 state['action'] == 'abort' 时优先使用的汇总模板"
+            "description": "（兼容 summary 节点）中止汇总模板"
+          },
+          "output_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Key",
+            "description": "（向后兼容 v1）额外镜像写入顶层 state 的字段名"
+          },
+          "cmd_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cmd Key",
+            "description": "（向后兼容 v1）从 inputs/state 读取命令的字段名"
+          },
+          "default_cmd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Cmd",
+            "description": "（向后兼容 v1）默认 shell 命令"
+          },
+          "expose_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Expose Keys",
+            "description": "（向后兼容 v1）暴露的顶层字段"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Options",
+            "description": "允许的审批动作"
           }
         },
         "type": "object",
@@ -818,14 +2102,34 @@
               "abort"
             ],
             "title": "Action",
-            "description": "审批动作：approve(通过) | revise(打回重改) | abort(中止)",
+            "description": "审批动作：approve(放行) | revise(打回指定节点) | abort(中止)",
             "default": "approve"
           },
           "feedback": {
             "type": "string",
             "title": "Feedback",
-            "description": "revise 时的修改意见（approve/abort 可留空）",
+            "description": "审批或打回修改意见（注入下游/打回节点的 {feedback} 变量）",
             "default": ""
+          },
+          "edited_outputs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Edited Outputs",
+            "description": "可选：人工直接在线修改的上游节点产出文本映射 {node_id: 修改后的文本}，放行前自动写回 State"
+          },
+          "target_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Node Id",
+            "description": "当 action='revise' 时，指定要打回重跑的上游节点 ID（可从 interrupt.rewind_options 中选择）"
           }
         },
         "type": "object",
@@ -849,12 +2153,121 @@
         ],
         "title": "ResumeOut"
       },
+      "RetryRunIn": {
+        "properties": {
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id",
+            "description": "要原地重试的节点 ID（留空则自动重试当前停靠/报错的断点节点）"
+          },
+          "prompt_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Template",
+            "description": "可选：重试该 Agent 节点时临时覆盖的 Prompt 模板"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command",
+            "description": "可选：重试该 Shell 节点时临时覆盖的命令"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id",
+            "description": "可选：重试时临时切换使用的 CLI Agent ID"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd",
+            "description": "可选：重试时临时覆盖的工作目录"
+          }
+        },
+        "type": "object",
+        "title": "RetryRunIn"
+      },
+      "RetryRunOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "retried_node_id": {
+            "type": "string",
+            "title": "Retried Node Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "thread_id",
+          "retried_node_id"
+        ],
+        "title": "RetryRunOut"
+      },
+      "RewindOptionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "可打回的上游节点 ID"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "上游节点显示名称"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "RewindOptionOut"
+      },
       "RouteRule": {
         "properties": {
           "field": {
             "type": "string",
             "title": "Field",
-            "description": "要判断的 state 字段名，如 action / passed / attempt"
+            "description": "要判断的变量路径，如 'test.ok' / 'test.runs' / 'inputs.branch'"
           },
           "op": {
             "type": "string",
@@ -865,11 +2278,14 @@
               "<=",
               ">",
               "<",
+              "contains",
+              "not_contains",
+              "regex",
               "truthy",
               "falsy"
             ],
             "title": "Op",
-            "description": "比较运算符：== | != | >= | <= | > | < | truthy | falsy",
+            "description": "比较运算符",
             "default": "=="
           },
           "value": {
@@ -880,7 +2296,7 @@
               }
             ],
             "title": "Value",
-            "description": "比较常量值（如 'approve'、True、2）"
+            "description": "比较常量值"
           },
           "value_ref": {
             "anyOf": [
@@ -892,12 +2308,12 @@
               }
             ],
             "title": "Value Ref",
-            "description": "动态引用另一个 state 字段进行比较（如 'max_attempts'）"
+            "description": "动态比较的另一变量路径"
           },
           "target": {
             "type": "string",
             "title": "Target",
-            "description": "命中条件时跳转的目标节点 ID（或 'END'）"
+            "description": "命中时跳转的目标节点 ID（或 'END'）"
           },
           "label": {
             "anyOf": [
@@ -909,7 +2325,7 @@
               }
             ],
             "title": "Label",
-            "description": "条件分支在画布上的连线标签"
+            "description": "画布连线标签"
           }
         },
         "type": "object",
@@ -917,20 +2333,27 @@
           "field",
           "target"
         ],
-        "title": "RouteRule"
+        "title": "RouteRule",
+        "description": "兼容多规则列表模式的路由项（包含 target）。"
       },
       "RunIn": {
         "properties": {
-          "task": {
-            "type": "string",
-            "title": "Task",
-            "description": "任务描述，例如：给 verify_graph.py 加 --verbose 参数"
-          },
           "workflow_id": {
             "type": "string",
             "title": "Workflow Id",
-            "description": "要运行的工作流 ID（默认 'coding'）",
-            "default": "coding"
+            "description": "要运行的工作流 ID"
+          },
+          "task": {
+            "type": "string",
+            "title": "Task",
+            "description": "任务描述（也可放在 inputs.task 中）",
+            "default": ""
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inputs",
+            "description": "对应 WorkflowSpec.inputs 定义的动态启动参数键值对"
           },
           "repo": {
             "anyOf": [
@@ -942,15 +2365,7 @@
               }
             ],
             "title": "Repo",
-            "description": "目标 git 仓库路径（服务器本地路径）"
-          },
-          "max_attempts": {
-            "type": "integer",
-            "maximum": 10.0,
-            "minimum": 1.0,
-            "title": "Max Attempts",
-            "description": "测试-修复循环最大尝试次数",
-            "default": 2
+            "description": "可选：默认工作目录覆盖"
           },
           "test_cmd": {
             "anyOf": [
@@ -962,12 +2377,20 @@
               }
             ],
             "title": "Test Cmd",
-            "description": "测试命令（在 repo 下执行，退出码 0 视为通过）"
+            "description": "可选：测试命令快捷参数"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "description": "最大循环尝试次数参考值",
+            "default": 3
           }
         },
         "type": "object",
         "required": [
-          "task"
+          "workflow_id"
         ],
         "title": "RunIn"
       },
@@ -987,6 +2410,76 @@
         ],
         "title": "RunListOut"
       },
+      "RunLogEntry": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq",
+            "description": "单次运行内单调递增的日志序号（从 1 开始）"
+          },
+          "ts": {
+            "type": "string",
+            "title": "Ts",
+            "description": "ISO-8601 时间戳"
+          },
+          "node_id": {
+            "type": "string",
+            "title": "Node Id",
+            "description": "产生该日志的节点 ID（系统事件为 '__system__'）"
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "stdout",
+              "stderr",
+              "system"
+            ],
+            "title": "Stream",
+            "description": "日志流类型：stdout | stderr | system",
+            "default": "stdout"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "单行日志内容"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seq",
+          "ts",
+          "node_id",
+          "text"
+        ],
+        "title": "RunLogEntry"
+      },
+      "RunLogsOut": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/RunLogEntry"
+            },
+            "type": "array",
+            "title": "Logs"
+          },
+          "next_seq": {
+            "type": "integer",
+            "title": "Next Seq",
+            "description": "下次增量轮询传入 after_seq 的游标值"
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "logs",
+          "next_seq"
+        ],
+        "title": "RunLogsOut"
+      },
       "RunStateOut": {
         "properties": {
           "thread_id": {
@@ -995,9 +2488,7 @@
           },
           "workflow_id": {
             "type": "string",
-            "title": "Workflow Id",
-            "description": "该运行所属的工作流 ID",
-            "default": "coding"
+            "title": "Workflow Id"
           },
           "status": {
             "type": "string",
@@ -1006,6 +2497,7 @@
               "running",
               "done",
               "error",
+              "cancelled",
               "interrupted",
               "unknown"
             ],
@@ -1016,7 +2508,16 @@
               "type": "string"
             },
             "type": "array",
-            "title": "Next"
+            "title": "Next",
+            "description": "当前停靠或即将执行的节点 ID 列表"
+          },
+          "running_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Running Nodes",
+            "description": "此刻正在活跃执行中的节点 ID 列表（支持并行多节点高亮）"
           },
           "values": {
             "$ref": "#/components/schemas/RunValues"
@@ -1065,12 +2566,19 @@
         "type": "object",
         "required": [
           "thread_id",
+          "workflow_id",
           "status"
         ],
         "title": "RunStateOut"
       },
       "RunValues": {
         "properties": {
+          "inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inputs",
+            "description": "本次运行的启动入参键值"
+          },
           "task": {
             "anyOf": [
               {
@@ -1092,39 +2600,6 @@
               }
             ],
             "title": "Repo"
-          },
-          "test_cmd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Test Cmd"
-          },
-          "max_attempts": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Attempts"
-          },
-          "plan": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plan"
           },
           "feedback": {
             "anyOf": [
@@ -1148,72 +2623,6 @@
             ],
             "title": "Action"
           },
-          "approved": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Approved"
-          },
-          "attempt": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attempt"
-          },
-          "patch": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Patch"
-          },
-          "test_output": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Test Output"
-          },
-          "passed": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Passed"
-          },
-          "review": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Review"
-          },
           "result": {
             "anyOf": [
               {
@@ -1224,6 +2633,14 @@
               }
             ],
             "title": "Result"
+          },
+          "nodes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/NodeExecutionOut"
+            },
+            "type": "object",
+            "title": "Nodes",
+            "description": "按节点 ID 索引的各节点结构化执行状态、产出与 Diff（点击画布任意节点即展示此详情）"
           },
           "events": {
             "items": {
@@ -1261,6 +2678,101 @@
           "workflow_id"
         ],
         "title": "StartRunOut"
+      },
+      "UpstreamSnapshotOut": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "agent"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code",
+            "default": 0
+          },
+          "output": {
+            "type": "string",
+            "title": "Output",
+            "default": ""
+          },
+          "diff": {
+            "type": "string",
+            "title": "Diff",
+            "default": ""
+          },
+          "stdout": {
+            "type": "string",
+            "title": "Stdout",
+            "default": ""
+          },
+          "edited_by_human": {
+            "type": "boolean",
+            "title": "Edited By Human",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id",
+          "label"
+        ],
+        "title": "UpstreamSnapshotOut"
+      },
+      "ValidateWorkflowOut": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "upstream_map": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Upstream Map",
+            "description": "每个节点可引用的上游节点 ID 列表（供前端 Prompt 编辑器提示 {节点ID.output} / {节点ID.diff} 变量）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid"
+        ],
+        "title": "ValidateWorkflowOut"
       },
       "ValidationError": {
         "properties": {
@@ -1302,6 +2814,163 @@
         ],
         "title": "ValidationError"
       },
+      "WorkerInfoOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Worker 唯一标识（内置本机为 'local'）"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "主机名称展示"
+          },
+          "hostname": {
+            "type": "string",
+            "title": "Hostname",
+            "description": "操作系统 hostname"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform",
+            "description": "操作系统与架构信息"
+          },
+          "online": {
+            "type": "boolean",
+            "title": "Online",
+            "description": "是否在线可调度",
+            "default": true
+          },
+          "is_local": {
+            "type": "boolean",
+            "title": "Is Local",
+            "description": "是否为操作台本机内置 Worker",
+            "default": true
+          },
+          "default_repo": {
+            "type": "string",
+            "title": "Default Repo",
+            "description": "该主机默认代码目录"
+          },
+          "online_agents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Online Agents",
+            "description": "该主机上探测到可用的 CLI Agent ID 列表"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "hostname",
+          "platform",
+          "default_repo"
+        ],
+        "title": "WorkerInfoOut"
+      },
+      "WorkerListOut": {
+        "properties": {
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerInfoOut"
+            },
+            "type": "array",
+            "title": "Workers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workers"
+        ],
+        "title": "WorkerListOut"
+      },
+      "WorkflowInputSpec": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "title": "Key",
+            "description": "入参变量名，模板中通过 {inputs.key} 引用"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "启动运行弹窗中的表单标签"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "textarea",
+              "text",
+              "path",
+              "number",
+              "boolean",
+              "select"
+            ],
+            "title": "Kind",
+            "description": "表单控件类型：textarea | text | path | number | boolean | select",
+            "default": "text"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "description": "是否必填",
+            "default": false
+          },
+          "default": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default",
+            "description": "默认值"
+          },
+          "placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Placeholder",
+            "description": "输入占位提示"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "字段说明"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Options",
+            "description": "当 kind='select' 时的可选值列表"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "WorkflowInputSpec"
+      },
       "WorkflowListOut": {
         "properties": {
           "workflows": {
@@ -1340,13 +3009,21 @@
           "builtin": {
             "type": "boolean",
             "title": "Builtin",
-            "description": "是否为系统内置工作流",
+            "description": "是否为系统模板（所有工作流均可自由编辑和删除）",
             "default": false
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowInputSpec"
+            },
+            "type": "array",
+            "title": "Inputs",
+            "description": "启动该工作流时的动态表单参数定义（默认只需填 task）"
           },
           "entry_point": {
             "type": "string",
             "title": "Entry Point",
-            "description": "入口节点 ID（START 指向的第一个节点）"
+            "description": "入口节点 ID（START 指向的首个节点；若存在多个并行入口也可在 edges 中由 START 连出）"
           },
           "nodes": {
             "items": {
@@ -1362,9 +3039,8 @@
               "$ref": "#/components/schemas/EdgeSpec"
             },
             "type": "array",
-            "minItems": 1,
             "title": "Edges",
-            "description": "工作流连线与条件路由列表"
+            "description": "工作流连线列表"
           },
           "updated_at": {
             "anyOf": [
@@ -1384,8 +3060,7 @@
           "id",
           "name",
           "entry_point",
-          "nodes",
-          "edges"
+          "nodes"
         ],
         "title": "WorkflowSpec"
       }

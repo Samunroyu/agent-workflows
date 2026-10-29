@@ -1,126 +1,120 @@
-# Frontend Agent 规范（仅限 Kimi 维护）
+# Frontend Agent 规范 v2（仅限 Kimi 维护）
 
-本目录（`frontend/`）为 `agent-workflows` 操作台的前端工程，**100% 由 Kimi 负责编写与维护**。
+本目录（`frontend/`）为 `agent-workflows` 多 Agent 研发协同编排操作台的前端工程，**100% 由 Kimi 负责编写与维护**。
 
 ## 1. 边界约束
 - **只允许修改 `frontend/` 目录内的文件**；可只读 `../shared/openapi.json` 与项目规则文件，严禁修改上级目录的 Python 后端代码（`../src/`、`../console/` 等）。
-- **接口契约唯一来源**：请读取 `../shared/openapi.json` 获取所有后端 REST API 路径、请求参数与响应 Schema。不要猜测接口字段。
+- **接口契约唯一来源**：请读取 `../shared/openapi.json`（OpenAPI `2.0.0`）获取所有 REST & SSE API 路径、请求参数与响应 Schema，严格对齐 `frontend/src/types.ts` 与 `frontend/src/api.ts`，不要猜测字段名。
+- 完成后请在项目根目录运行 `python scripts/check_agent_boundaries.py --role frontend` 和 `npm --prefix frontend run build` 自检零报错。
 
-## 2. 技术选型要求
-- **框架与构建**：React 18+ + TypeScript + Vite
-- **样式与图标**：Tailwind CSS + `lucide-react`（深色科技感主题，延续操作台紧凑清晰的工程风格）
-- **流程图/编排画布**：`@xyflow/react`（React Flow，**动态读取 `GET /api/workflows` 返回的 `WorkflowSpec.nodes` 和 `WorkflowSpec.edges` 渲染任意工作流拓扑图**，严禁在前端写死节点，从而保证外部 Agent 通过 API 或 MCP 生成新工作流后，Web 页面立即可见并可渲染）
-- **开发服务器代理**：`vite.config.ts` 中配置 `server.proxy`，将 `/api` 代理到 `http://127.0.0.1:8080`；`build.outDir` 保持为 `dist`。
+---
 
-## 3. 核心功能要求（对齐 `../shared/openapi.json`）
-1. **顶部状态栏与工作流切换器**：
-   - 调用 `GET /api/health` 显示当前后端 Agent 类型（`stub` / `codex`）及在线状态、实时时钟。
-   - 调用 `GET /api/workflows` 获取已注册的工作流列表（如默认的 `coding` 以及外部 Agent 动态生成的任何工作流），支持切换查看不同工作流的拓扑图。
-2. **左侧边栏（新建 Run + 运行列表）**：
-   - 新建表单：选择 `workflow_id`（下拉选择 `/api/workflows` 中的工作流，默认 `coding`）、填写 `task`（必填）、`repo`（可选）、`test_cmd`（可选）、`max_attempts`（默认 2），调用 `POST /api/runs`，展示返回的 `warnings`（如有）。
-   - 运行列表：每 2.5s 轮询 `GET /api/runs`，展示所有 Run 的状态徽章（`waiting` 待审批 / `running` 执行中 / `done` 已完成 / `error` 出错 / `interrupted` 已中断）、所属 `workflow_id`、任务标题与 `thread_id`。
-3. **右侧详情区（选中某个 Run 时通过 `GET /api/runs/{tid}` 渲染；未选中 Run 时展示当前所选工作流的画布预览）**：
-   - **动态工作流拓扑画布（React Flow）**：根据当前 Run 所属的 `workflow_id` 找到对应的 `WorkflowSpec`，将 `nodes`（区分 `agent` / `gate` / `shell` / `summary` 四种类型样式，若节点自带 `position` 则使用，否则自动横向/分层排布）和 `edges`（普通实线边 `target` + 条件虚线边 `conditions` / `default_target`）渲染为流程图，并根据 `values.events`、`next`、`status` 动态高亮已执行节点与当前停靠节点。
-   - **待人工审批卡片（当 `interrupts` 非空且 `status === "waiting"` 时置顶醒目展示）**：
-     - 展示 `stage`、`plan`、`patch`（带 `+/-` 语法着色的 Git Diff 视图）、`test_output`、`review` 以及 `interrupts` 中暴露的其他自定义字段。
-     - 提供 `feedback` 文本框和审批按钮：`通过 (approve)`、`打回 (revise)`、`中止 (abort)`，点击调用 `POST /api/runs/{tid}/resume`。
-   - **事件流标签（`values.events`）**、**最近 Diff 视图（`values.patch`）**、**执行结果（`values.result`）** 与 **错误堆栈（`error`）**。
+## 2. 技术选型与核心架构升级目标
 
-## 4. 现代 Web 研发与无障碍规范（对齐 `modern-web-guidance`）
+- **框架与构建**：React 18+ + TypeScript + Vite（`vite.config.ts` 将 `/api` 代理到 `http://127.0.0.1:8080`，`build.outDir` 保持为 `dist`）。
+- **样式与图标**：Tailwind CSS + 自定义语义 CSS 变量 + `lucide-react`。
+- **交互式编排画布**：`@xyflow/react`（React Flow）。
+  - **重要改造**：旧版画布写死了只读 `nodesDraggable={false}` / `nodesConnectable={false}` 且详情页写死了 `plan / patch / test / review` 四个固定 Tab。**新版必须彻底移除只读限制与固定四阶段 Tab**，升级为支持**可视化自由增删改节点与连线 + 一句话自然语言改图 + 点击画布任意节点查看实时流式日志/产出/Diff + 增强型人工控场**的完整操作台！
 
-在编写或修改 `frontend/` 下的 HTML、CSS 与 React/TS 代码时，**必须严格遵守以下现代 Web 规范**：
+---
 
-### 4.1 原生浮层与模态框（`dialog` / `light-dismiss-a-dialog` / `prevent-page-scroll-under-modal-dialog` / `persistent-toast-notifications`）
-- **模态框必须使用原生 `<dialog>`**：
-  - 严禁使用 `<div class="modal-backdrop"> + <section role="dialog" aria-modal="true">` 手写遮罩与 `Escape` 监听。
-  - 必须使用 `<dialog closedby="any" aria-labelledby="...">` 并通过 `ref.current?.showModal()` 打开（浏览器自动接管 Top Layer、焦点陷阱、背景 `inert`、`Esc` 关闭与焦点归还，**禁止在原生 `<dialog>` 上重复添加 `role="dialog"` 或 `aria-modal`**）。
-  - 为不支持 `closedby` 的浏览器（如 Safari）提供 `if (!('closedBy' in HTMLDialogElement.prototype))` 的 `pointerdown` + `pointerup` 坐标边界检测回退。
-  - **禁止使用 `body { overflow: hidden }` 锁定滚动**；必须同时在 `dialog:modal` 和 `dialog::backdrop` 上配置滚动包含：
-    ```css
-    dialog:modal { overscroll-behavior: contain; }
-    dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
-    ```
-- **Toast 与动态状态提示**：
-  - 顶部 Toast 通知推荐使用 `popover="manual"` 置入 Top Layer（并提供 `@oddbird/popover-polyfill` 按需特性检测或优雅降级），关闭按钮必须具备显式可访问名称。
-  - 错误横幅（Banner）与动态状态提示必须声明 `role="alert"`（紧急错误）或 `aria-live="polite"`（一般状态通知）。
+## 3. 核心功能与接口对接清单（严格对齐 `../shared/openapi.json` v2.0.0）
 
-### 4.2 表单语义、校验与输入体验（`forms` / `required-field-feedback` / `accessibility`）
-- **显式 `<label>` 与 `name` 关联**：
-  - 所有 `<input>`、`<textarea>`、`<select>` 必须关联显式的 `<label htmlFor="id">`（或使用 React `useId()` 生成唯一 ID）并设置 `name` 属性；**严禁仅依赖 `placeholder` 充当标签**（包括审批区的 `feedback` 文本框）。
-  - 搜索区域必须使用语义化 `<search>` 地标包裹，输入框使用 `type="search"`。
-  - 存放路径、命令或标识符的输入框（如 `repo`、`test_cmd`、搜索框）必须关闭自动纠错：`autoCorrect="off" autoCapitalize="off" spellCheck={false}`。
-- **校验时机与提交按钮状态**：
-  - **严禁通过禁用提交按钮来阻止表单校验**（例如禁止写 `disabled={!form.task.trim()}`），应保持提交按钮可点击（仅在 `submitting` 请求进行中禁用以防重复提交），让浏览器原生触发必填校验并聚焦首个错误字段。
-  - 使用 `:user-invalid` 伪类（避免页面初始加载即标红）配合非颜色视觉提示展示必填错误，并通过 `onBlur` / `onSubmit` / `onInput` 同步 `aria-invalid="true"`。
-- **输入框可调整性与触控尺寸**：
-  - 严禁对 `<textarea>` 设置 `resize: none`（允许 `resize: vertical`）。
-  - 表单控件字号在移动端至少为 `1rem`（16px）以防止 iOS Safari 自动放大页面；粗指针设备（`@media (pointer: coarse)`）交互目标尺寸不小于 `48px`（常规可点击元素最小 `24x24px`）。
+### 3.1 顶部状态栏与 CLI Agent 管理弹窗
+1. **健康与在线 Agent 状态胶囊**：
+   - 调用 `GET /api/health` 与 `GET /api/agents` 展示当前就绪的真实本地 CLI Agent 数量与列表（如 `codex, claude 在线`，注意后端已彻底移除假 `StubAgent`）。
+   - 点击顶部「Agent 管理」按钮打开原生 `<dialog>`：
+     - 展示 `GET /api/agents` 返回的所有内置预设（`codex` / `claude` / `kimi` / `gemini`）及自定义 CLI 的 `available` 状态与探测到的二进制路径 `resolved_path`。
+     - 支持新增或编辑 CLI Agent（调用 `POST /api/agents`，可配置 `id`、`name`、`driver`、`binary`、`model`、`args_template` / `command_template`、`timeout_sec`），以及删除自定义 Agent（`DELETE /api/agents/{agent_id}`）。
 
-### 4.3 排版与系统级字号缩放（`typography` / `respect-os-text-scale`）
-- **接入系统字号缩放**：在 `index.html` 的 `<head>` 中声明 `<meta name="text-scale" content="scale" />`，且**严禁在 `:root` 或 `html` 上硬编码覆盖 `font-size`（如 `font-size: 16px`）**。
-- **使用相对单位与无单位行高**：
-  - **严禁使用 `px` 定义 `font-size`**，必须统一使用 `rem`（或上下文相关的 `em` / `clamp()`），确保用户调整浏览器或系统字号至 200% 时可读、无截断。
-  - `line-height` 必须使用无单位数值（如 `1.5`），代码块使用 `overflow-wrap: anywhere` 或 `break-word`。
-  - 响应式断点优先使用容器查询或基于 `em`/`rem` 的媒体查询，避免固定 `height` / `max-height` 导致大字号下文本溢出。
+### 3.2 可视化工作流编辑器（编辑态）与一句话自然语言改图
+当未选中具体运行记录（或用户切换到「编排编辑」模式）时，主工作区进入**可编辑工作流画布模式**：
 
-### 4.4 无障碍与语义化 HTML（`html` / `accessibility` / `spinner`）
-- **严禁使用 `title` 作为唯一可访问名称**：
-  - 所有纯图标按钮（侧边栏导航、通知铃铛、关闭详情、关闭弹窗、关闭 Toast 等）必须提供 `aria-label` 或 `.visually-hidden` 文本；内部装饰性 `<svg>` 图标应设置 `aria-hidden="true"`。
-  - 响应式隐藏按钮文字时（如窄屏下的“发起新运行”按钮），**严禁使用 `font-size: 0`**，必须使用标准 `.visually-hidden` 类（`clip-path: inset(50%)` + `1px` 宽高）。
-- **语义化标签与键盘可达性**：
-  - 凡是触发动作的交互项（如运行记录行）必须使用 `<button type="button">`；可滚动的代码块 `<pre>` 必须设置 `tabIndex={0}` 且内部包裹 `<code>` 元素。
-  - 使用 `role="tablist"` / `role="tab"` 时，内容面板必须配套 `role="tabpanel"` 与 `aria-labelledby`，并支持左右方向键切换 Tab。
-- **加载指示器与动效偏好**：
-  - 加载状态优先结合语义化 `<progress aria-label="正在加载…" />`，且所有旋转/过渡动画必须遵守 `@media (prefers-reduced-motion: reduce)`（降速或关闭高频旋转）。
+1. **工作流管理栏**：
+   - 下拉切换工作流（`GET /api/workflows`）。
+   - **新建工作流**：初始化一个带默认入口节点的可编辑草稿。
+   - **复制工作流**：基于当前 `WorkflowSpec` 克隆新 ID。
+   - **工作流设置（名称 / 描述 / 自定义启动入参 `WorkflowSpec.inputs`）**：允许用户增删改该工作流的启动表单字段（`WorkflowInputSpec`：`key`、`label`、`kind`、`required`、`default`、`placeholder`；默认仅保留 `task` 必填即可一键开跑）。
+   - **保存工作流**：调用 `POST /api/workflows`（或 `PUT /api/workflows/{workflow_id}`），在有未保存改动时显示醒目的“未保存更改”提示与「保存」按钮；保存前或节点变更时可调用 `POST /api/workflows/validate` 实时校验拓扑合法性并获取 `upstream_map`。
+   - **删除工作流**：调用 `DELETE /api/workflows/{workflow_id}`（所有工作流均可删除，删除前二次确认）。
 
-### 4.5 现代 CSS 架构（`css`）
-- **禁止全局通配符重置**：避免在 `*` 上编写全局重置样式（如 `* { box-sizing: border-box; }`），应按具体元素或 `@layer` 分层声明。
-- **避免选择器过度匹配（Overmatching）**：按钮的 `:hover` 样式必须排除禁用态（使用 `button:hover:not(:disabled)`），防止禁用按钮在鼠标悬停时触发背景色或位移变化。
-- **使用 CSS 自定义属性（Design Tokens）传递动态状态**：避免在 JSX 中硬编码内联静态颜色对象（如 `style={{ color: '#...', background: '#...' }}`），优先通过 CSS 变量或语义类名驱动主题与状态色，并及时清理未使用的原型演示样式（如废弃的 `.demo-a` / `.demo-c`）。
+2. **一句话自然语言生成/修改工作流（AI 改图栏）**：
+   - 在画布上方提供显式关联 `<label>` 的自然语言输入栏（例如占位提示：`输入一句话生成或改图，如：在测试后加一个 Claude 审查节点，或改成前后端并行开发…`）+ 可选 CLI 选择器（默认 `auto`）+「AI 构图」按钮。
+   - 提交时调用 `POST /api/workflows/copilot`，请求体 `{ instruction, current_workflow, agent_id, auto_save: false }`（新建空白时 `current_workflow` 传 `null`，修改当前图时传当前画布上的 `WorkflowSpec`）。
+   - 接口返回 `{ workflow, summary, agent_used }` 后，立即将新 `workflow` 渲染到画布上并标记为待保存草稿（同时支持一键「撤销本次 AI 改图」或点击「保存」落盘），Toast 展示 `summary`。
 
-## 5. 当前前端工程待整改清单（供 Kimi 逐项修复）
+3. **画布交互式节点增删与并行/条件连线（React Flow）**：
+   - 在编辑态开启 `nodesDraggable={true}`、`nodesConnectable={true}`、`elementsSelectable={true}`，同步节点拖拽后的 `position: { x, y }` 到草稿 `WorkflowSpec.nodes`。
+   - **节点工具栏（一键添加四类标准节点）**：
+     - `+ Agent 节点` (`kind: "agent"`)：绑定 CLI Agent 执行编码、分析或审查。
+     - `+ Shell 命令` (`kind: "shell"`)：执行构建、测试、Git 同步等脚本。
+     - `+ 人工卡点` (`kind: "gate"`)：暂停等待人工审批、在线改产出或指定节点打回。
+     - `+ 条件判断` (`kind: "condition"`)：根据上游 `ok` / `exit_code` / `runs` / `output` 分支路由或循环重试。
+     - 画布自动渲染虚拟 `END`（结束）目标节点以便用户将终末节点拖线连向 `END`，并在入口节点（`workflow.entry_point`）上展示醒目的「入口 (START)」徽章。
+   - **连线与删除**：
+     - 从任意节点拖线连接到另一节点（或 `END`）时新增一条 `EdgeSpec`（**从同一节点拉出多条普通无条件边即构成并行分支 Fan-out**！）。
+     - 选中任意节点或连线后，可通过右侧属性面板的「删除节点 / 删除连线」按钮删除（删除节点时一并清理关联的 `edges`，若删的是 `entry_point` 则自动顺延或提示重设入口）。
 
-以下为基于 `modern-web-guidance` 对 `frontend/` 现有代码扫描出的具体不合规项，Kimi 在维护前端时需按此清单逐项完成整改：
+4. **编辑态右侧属性配置抽屉（选中节点或连线时展示）**：
+   - **选中节点（`NodeSpec`）时**：
+     - 通用字段：节点 ID、显示名称 `label`、职责描述 `description`、「设为入口节点 (`entry_point`)」按钮、多入边汇聚策略 `join_mode`（`auto` 自动识别并行汇聚 | `all` 等待全部并行分支完成 | `any` 任一到达即触发）、循环上限 `max_runs`。
+     - 当 `kind === "agent"` 时：
+       - 执行主机 `worker_id`（下拉读取 `GET /api/workers`，一期为 `local`）。
+       - CLI Agent `agent_id`（下拉读取 `GET /api/agents`，展示 `auto` 及各 CLI 的在线/未安装状态）。
+       - 工作目录 `cwd`（可填子目录如 `frontend`、绝对路径或 `{inputs.repo}`）。
+       - 沙箱权限 `sandbox`（`read-only` 只读分析 | `workspace-write` 允许读写代码）与 `capture_git_diff` 开关。
+       - `prompt_template` 多行编辑器 + **快捷插入变量胶囊按钮**：提供 `{task}`、`{feedback}`、各 `{inputs.<key>}`，以及根据上游节点自动列出的 **`{<上游节点ID>.output}`**、**`{<上游节点ID>.diff}`**、**`{<上游节点ID>.stdout}`**，点击胶囊直接插入到 Prompt 光标处！
+     - 当 `kind === "shell"` 时：
+       - 执行主机 `worker_id`、工作目录 `cwd`、`command` 命令模板（同样提供上游变量胶囊快捷插入）、`continue_on_error` 开关、超时时间 `timeout_sec`。
+     - 当 `kind === "gate"` 时：
+       - 审批提示说明 `instruction`、重点审阅的上游节点多选 `review_nodes`、**`allow_edit_output` 开关（允许审批人直接在线编辑修改上游产出）**、允许打回的目标上游节点多选 `rewind_targets`。
+     - 当 `kind === "condition"`（或选中某条出边 `EdgeSpec`）时：
+       - 可视化编辑该节点各条出边的条件规则：目标节点 `target`、连线标签 `label`、是否为兜底分支 `is_default`，以及条件表达式 `condition`（`field` 支持下拉选上游节点的 `<node_id>.ok` / `<node_id>.exit_code` / `<node_id>.runs` / `<node_id>.output`，`op` 支持 `== | != | < | <= | > | >= | contains | not_contains | regex | truthy | falsy`，`value` 常量值）。
 
-### 5.1 `frontend/index.html`
-- [x] **补充系统字号缩放 Meta 标签（`respect-os-text-scale`）**：在 `<head>` 中新增 `<meta name="text-scale" content="scale" />`。
+---
 
-### 5.2 `frontend/src/CloudConsole.tsx`
-- [x] **新建运行弹窗改用原生 `<dialog>`（`dialog` / `light-dismiss-a-dialog`）**：
-  - 将 `<div className="modal-backdrop"> + <section className="run-modal" role="dialog" aria-modal="true">` 替换为 `<dialog ref={dialogRef} className="run-modal" closedby="any" aria-labelledby="new-run-title" onClose={() => setModalOpen(false)}>`。
-  - 通过 `dialogRef.current?.showModal()` / `dialogRef.current?.close()` 控制开关，移除手动监听 `Escape` 关闭弹窗的代码（浏览器原生处理 `Esc`、焦点陷阱、Top Layer 与背景 `inert`）。
-  - 增加 `if (!('closedBy' in HTMLDialogElement.prototype))` 的 `pointerdown` + `pointerup` 矩形边界检测回退以兼容 Safari。
-- [x] **表单控件补齐显式 `htmlFor`/`id`、`name` 与语义地标（`forms` / `accessibility`）**：
-  - 顶部搜索框外层使用 `<search>` 包裹，`<input type="search" id="run-search" name="q" autoCorrect="off" autoCapitalize="off" spellCheck={false} />` 并配对显式 `<label htmlFor="run-search">`。
-  - 审批区反馈输入框 `<textarea>` 必须补充显式 `<label htmlFor="approval-feedback">`（可使用 `.visually-hidden` 或可见标签）与 `name="feedback"`，严禁仅靠 `placeholder` 充当标签。
-  - 新建运行弹窗中的 `workflow_id`、`task`、`repo`、`test_cmd`、`max_attempts` 全部改为显式 `<label htmlFor="...">` + 对应 `id` 与 `name`；`repo` 与 `test_cmd` 补充 `autoCorrect="off" autoCapitalize="off" spellCheck={false}`。
-- [x] **移除禁用提交按钮阻止校验的反模式，接入 `:user-invalid` + `aria-invalid`（`required-field-feedback` / `forms`）**：
-  - 将提交按钮 `disabled={submitting || !form.task.trim()}` 改为 `disabled={submitting}`。
-  - 为必填项 `task` 添加错误提示节点（含图标与文字）和 `aria-errormessage`，并在 `onBlur` / `onInput` / `onSubmit` 中同步 `aria-invalid`。
-- [x] **补齐纯图标按钮的可访问名称（`accessibility` / `html`）**：
-  - 左侧导航栏 3 个图标按钮、顶部通知铃铛按钮、详情面板关闭按钮、弹窗关闭按钮、Toast 关闭按钮必须全部添加明确的 `aria-label`（不要仅依赖 `title`），且按钮内装饰性图标加上 `aria-hidden="true"`。
-- [x] **完善详情区 Tab 组件与代码块无障碍（`accessibility` / `html`）**：
-  - 为 `role="tab"` 按钮添加 `id` 与 `aria-controls`，支持左右方向键（`ArrowLeft` / `ArrowRight`）切换 Tab；为 `.detail-content` 面板添加 `role="tabpanel"` 与 `aria-labelledby`。
-  - 将 `DiffView` 及 `plan`/`test`/`review` 的 `<pre className="detail-code">` 补充 `tabIndex={0}`，且确保所有 `<pre>` 内部均包裹 `<code>` 元素。
-- [x] **动态错误与 Toast 通知语义化（`accessibility` / `persistent-toast-notifications`）**：
-  - 为 `.console-banner--error` 与 `.inline-error` 添加 `role="alert"`。
-  - 为 `.console-toast` 添加 `role="status"` / `aria-live="polite"`（或改造为 `popover="manual"` Top Layer 通知）。
+### 3.3 动态启动弹窗与运行期实时控场（运行监控态）
 
-### 5.3 `frontend/src/components/Shared.tsx`
-- [x] **为交互组件补齐 `type="button"` 与 CSS 变量主题（`html` / `css`）**：
-  - `RunRow` 的 `<button>` 显式声明 `type="button"`。
-  - `StatusBadge` 避免直接内联静态颜色对象，改为通过 CSS 自定义属性（如 `style={{ '--badge-color': meta.color, '--badge-bg': meta.bg } as CSSProperties}`）或状态修饰类名驱动样式；加载状态图标配合无障碍状态文本与减缓动画支持。
+1. **动态「发起新运行」弹窗（`<dialog>`）**：
+   - 选择要运行的 `workflow_id` 后，**动态根据该工作流的 `WorkflowSpec.inputs` 数组渲染表单项**（支持 `textarea`、`text`、`path`、`number`、`boolean`、`select`）。
+   - 默认工作流只需填一句必填的 `task`（任务描述）即可直接点击「创建并运行」，调用 `POST /api/runs` 传入 `{ workflow_id, task, inputs }`。
 
-### 5.4 `frontend/src/styles.css`
-- [x] **移除全局 `*` 重置与废代码（`css`）**：
-  - 移除 `* { box-sizing: border-box; }` 全局通配重置，清理未使用的 `.preview-*`、`.demo-a`、`.demo-c` 冗余样式。
-- [x] **原生 `<dialog>` 滚动锁定样式（`prevent-page-scroll-under-modal-dialog`）**：
-  - 新增 `dialog:modal { overscroll-behavior: contain; }` 与 `dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }`。
-- [x] **全量字号由 `px` 迁移为 `rem` 并修正行高与表单字号（`typography` / `respect-os-text-scale` / `forms`）**：
-  - 将所有 `font-size: ...px`（特别是 `7px`–`10px` 的过小字号）替换为合理的 `rem` 相对单位；确保表单 `input`/`textarea`/`select` 字号不少于 `1rem`（防止移动端聚焦自动放大）。
-  - 移除 `.approval-controls textarea` 的 `resize: none`，改为 `resize: vertical`。
-  - 移除移动端 `@media (max-width: 640px)` 下 `.b-new-run { font-size: 0; }` 的写法，改用标准 `.visually-hidden` 工具类隐藏按钮文字。
-- [x] **修复按钮悬停选择器过度匹配与动效偏好（`css` / `accessibility` / `spinner`）**：
-  - 将 `.b-new-run:hover`、`.b-approve:hover` 等按钮悬停规则改为 `:hover:not(:disabled)`。
-  - 新增 `@media (prefers-reduced-motion: reduce)` 规则，减缓 `.animate-spin` 等旋转与位移动画。
+2. **运行监控态画布与点击节点看详情（彻底取代写死的旧版 4 个 Tab）**：
+   - 选中某条运行记录（`RunStateOut`）时，画布实时高亮各节点状态：
+     - `running_nodes` 中的节点：脉冲动画高亮（**支持多个并行节点同时高亮“执行中”**）。
+     - `status === "waiting"` / `"error"` / `"cancelled"` 时 `next` 中的节点：醒目停靠高亮（待审批 / 失败断点 / 已强杀断点）。
+     - `values.nodes[nodeId]` 中已执行节点：展示状态角标与已执行次数 `runs`（如 `×2`），若 `edited_by_human === true` 显示「人工已修订」标记。
+   - **点击画布上的任意节点**，右侧详情面板立即切换展示该节点的运行数据（结合 `values.nodes[selectedNodeId]` 与实时日志）：
+     - **实时终端日志 Tab**：通过 `EventSource('/api/runs/' + threadId + '/stream?after_seq=...')` 订阅 SSE 实时日志流（并在历史/切换节点时配合 `GET /api/runs/{tid}/logs?node_id=...`），CLI 执行期间毫秒级逐行滚动显示输出！
+     - **节点产出 Tab (`output`)**：展示该节点的结构化输出文本（若被人工在线编辑过则标注）。
+     - **代码变更 Tab (`diff`)**：若 `diff` 非空，使用语法着色的 `+/-` Git Diff 视图展示。
 
+3. **三大运行期人工控场操作**：
+   - **运行中随时强杀中止**：当 `run.status === "running"` 时，右侧面板顶部与运行列表提供醒目的红色「强杀中止」按钮，调用 `POST /api/runs/{tid}/cancel` 立即杀掉后端活跃子进程组。
+   - **失败/被中止节点原地重试（支持临时改参）**：当 `run.status` 为 `"error"`、`"cancelled"` 或 `"interrupted"` 时，提供「原地重试该节点」按钮（调用 `POST /api/runs/{tid}/retry`），并支持展开“重试前临时调整参数”（可临时覆盖本次重试节点的 `agent_id`、`cwd`、`prompt_template` 或 `command`），无需从头重跑已完成的上游节点！
+   - **增强型人工卡点审批卡片（当 `run.status === "waiting"` 且 `interrupts` 非空时置顶展示）**：
+     - 展示 `interrupt.label`、`interrupt.instruction` 以及 `interrupt.upstream_outputs` 中各上游节点的 `output` 与 `diff`。
+     - **直接在线修改上游产出**：当 `interrupt.allow_edit_output === true` 时，上游节点的 `output` 旁提供「在线编辑内容」切换按钮，用户可直接修改方案/契约文本；点击「确认并继续 (`approve`)」时，将修改后的内容放入 `POST /api/runs/{tid}/resume` 的 `edited_outputs: { [nodeId]: editedText }` 一并提交！
+     - **自选打回到任意上游节点**：提供显式关联 `<label>` 的「打回目标节点 (`target_node_id`)」下拉框（选项来自 `interrupt.rewind_options`，例如在并行汇聚后的验收卡点，可单独选择只打回给 `前端模块实现` 或只打回给 `后端模块实现`）+ `feedback` 意见输入框 +「打回重跑 (`revise`)」按钮 +「中止运行 (`abort`)」按钮。
+
+---
+
+## 4. 现代 Web 研发与无障碍规范（必须继续严格遵守）
+
+在编写或重构 `frontend/` 下的所有新组件（画布工具栏、节点抽屉、AI 改图栏、Agent 管理弹窗、动态启动表单、实时日志终端、增强审批卡片）时，**必须持续遵守以下规范**：
+
+### 4.1 原生浮层与模态框
+- 所有模态弹窗（新建运行、Agent 管理、工作流元信息设置、删除确认）**必须使用原生 `<dialog closedby="any" aria-labelledby="...">`** 并通过 `ref.current?.showModal()` / `close()` 控制；**禁止**手写 `<div class="modal-backdrop">` 遮罩或重复添加 `role="dialog"` / `aria-modal`，保留 Safari `pointerdown` + `pointerup` 矩形边界检测回退。
+- 保持滚动包含样式：`dialog:modal { overscroll-behavior: contain; }` 与 `dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }`，严禁使用 `body { overflow: hidden }`。
+- 错误横幅使用 `role="alert"`，Toast 状态通知使用 `role="status"` / `aria-live="polite"`。
+
+### 4.2 表单语义、校验与输入体验
+- **所有 `<input>`、`<textarea>`、`<select>` 必须关联显式的 `<label htmlFor="id">` 并声明 `name` 属性**（包括 AI 改图输入框、节点属性抽屉中的每一项、打回目标下拉框与审批 `feedback` 文本框），严禁仅依赖 `placeholder` 充当标签。
+- 搜索区域保持 `<search>` 地标 + `type="search"`；存放路径、命令、ID 或二进制名的输入框（如 `cwd`、`command`、`binary`、`id`、`repo`）必须设置 `autoCorrect="off" autoCapitalize="off" spellCheck={false}`。
+- 严禁通过禁用提交按钮来阻止必填项校验（仅在请求进行中 `submitting` 时禁用防重）；`<textarea>` 允许 `resize: vertical`（禁止 `resize: none`）。
+
+### 4.3 排版、无障碍与现代 CSS
+- 保留 `<meta name="text-scale" content="scale" />`，**严禁使用 `px` 定义 `font-size`**（统一使用 `rem`），`line-height` 使用无单位数值，表单控件字号不小于 `1rem`。
+- 所有纯图标按钮必须具备明确的 `aria-label`，内部图标 `<svg>` 设置 `aria-hidden="true"`；可滚动日志终端与代码块 `<pre>` 设置 `tabIndex={0}` 并包裹 `<code>`。
+- Tab 切换组件严格配套 `role="tablist"` / `role="tab"` / `role="tabpanel"`、`aria-controls`、`aria-labelledby` 及左右方向键导航。
+- 严禁全局 `*` 重置；按钮 `:hover` 统一写成 `:hover:not(:disabled)`；动效遵守 `@media (prefers-reduced-motion: reduce)`；动态颜色通过 CSS 自定义属性（Design Tokens）传递。
