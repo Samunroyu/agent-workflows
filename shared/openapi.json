@@ -1124,17 +1124,17 @@
               "codex",
               "claude",
               "kimi",
-              "gemini",
+              "agy",
               "custom"
             ],
             "title": "Driver",
-            "description": "驱动类型：codex | claude | kimi | gemini | custom（自定义命令模板）",
+            "description": "驱动类型：codex | claude | kimi | agy | custom（自定义命令模板）",
             "default": "custom"
           },
           "binary": {
             "type": "string",
             "title": "Binary",
-            "description": "可执行文件名称或绝对路径，如 codex / claude / kimi"
+            "description": "可执行文件名称或绝对路径，如 codex / claude / kimi / agy"
           },
           "description": {
             "type": "string",
@@ -1243,17 +1243,17 @@
               "codex",
               "claude",
               "kimi",
-              "gemini",
+              "agy",
               "custom"
             ],
             "title": "Driver",
-            "description": "驱动类型：codex | claude | kimi | gemini | custom（自定义命令模板）",
+            "description": "驱动类型：codex | claude | kimi | agy | custom（自定义命令模板）",
             "default": "custom"
           },
           "binary": {
             "type": "string",
             "title": "Binary",
-            "description": "可执行文件名称或绝对路径，如 codex / claude / kimi"
+            "description": "可执行文件名称或绝对路径，如 codex / claude / kimi / agy"
           },
           "description": {
             "type": "string",
@@ -2174,7 +2174,7 @@
           "agent_id": {
             "type": "string",
             "title": "Agent Id",
-            "description": "要调用的 CLI Agent ID（如 'codex' / 'claude' / 'kimi' / 'gemini' / 自定义 ID；'auto' 自动选用首个就绪 CLI）",
+            "description": "要调用的 CLI Agent ID（如 'codex' / 'claude' / 'kimi' / 'agy' / 自定义 ID；'auto' 自动选用首个就绪 CLI）",
             "default": "auto"
           },
           "prompt_template": {

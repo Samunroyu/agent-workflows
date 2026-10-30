@@ -2,7 +2,7 @@
 
 核心能力：
 1. 四类标准编排节点：
-   - agent     : 绑定具体 CLI Agent（codex / claude / kimi / gemini / custom）与工作目录、读写沙箱
+   - agent     : 绑定具体 CLI Agent（codex / claude / kimi / agy / custom）与工作目录、读写沙箱
    - shell     : 执行构建、测试、Git 同步或校验脚本，捕获退出码与标准输出
    - gate      : 增强型人工卡点，支持在线编辑上游节点产出后放行、自选打回到任意上游节点、或中止运行
    - condition : 结构化条件路由与循环控制（支持判断任意上游节点的 ok / exit_code / output / runs 等）
@@ -179,7 +179,7 @@ class NodeSpec(BaseModel):
     # ---- agent 节点配置 ----
     agent_id: str = Field(
         "auto",
-        description="要调用的 CLI Agent ID（如 'codex' / 'claude' / 'kimi' / 'gemini' / 自定义 ID；'auto' 自动选用首个就绪 CLI）",
+        description="要调用的 CLI Agent ID（如 'codex' / 'claude' / 'kimi' / 'agy' / 自定义 ID；'auto' 自动选用首个就绪 CLI）",
     )
     prompt_template: Optional[str] = Field(
         None,

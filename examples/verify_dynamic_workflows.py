@@ -73,13 +73,14 @@ def test_1_agents_and_security(client: TestClient) -> str:
     assert "step=步骤一" in rendered
     assert "{task.__class__}" in rendered
 
-    # CLI Agent 列表：绝不包含假 stub，且包含四大内置预设
+    # CLI Agent 列表：绝不包含假 stub，且包含四大内置预设（gemini 已替换为 agy）
     r_agents = client.get("/api/agents")
     assert r_agents.status_code == 200
     agents = r_agents.json()["agents"]
     ids = {a["id"] for a in agents}
     assert "stub" not in ids, "不应存在假 StubAgent"
-    assert {"codex", "claude", "kimi", "gemini"}.issubset(ids)
+    assert "gemini" not in ids, "内置列表不应再出现旧 gemini 预设"
+    assert {"codex", "claude", "kimi", "agy"}.issubset(ids)
 
     # 注册一个使用当前 Python 解释器的真实本地自定义 CLI Agent（用于快速确定性验证多进程流式执行）
     py_cli = {
@@ -579,7 +580,163 @@ def test_7_quick_create_rename_and_condition_edge_polish(client: TestClient) -> 
     tid = client.post("/api/runs", json={"workflow_id": "stale-cond-edge-flow", "task": "check"}).json()["thread_id"]
     st = _wait_for_status(client, tid, {"done"})
     assert st["values"]["nodes"]["fallback_ok"]["ok"] is True
-    print("[ok] 7/7 一键新建工作流（空白/模板/AI）、节点 ID 全图联动重命名与条件边容错验证通过")
+    print("[ok] 7/8 一键新建工作流（空白/模板/AI）、节点 ID 全图联动重命名与条件边容错验证通过")
+
+
+def test_8_agy_preset_and_gemini_compat(client: TestClient) -> None:
+    from src.agents.registry import AgentProfileSpec, AgentRegistry, _build_cli_command
+
+    # 1) _build_cli_command 在只读 / 可写两种模式（及带 model）下生成的命令均正确
+    agy_spec = AgentProfileSpec(id="agy", name="Antigravity CLI", driver="agy", binary="agy", builtin=True)
+    cmd_ro, shell_ro = _build_cli_command(
+        agy_spec,
+        "/usr/local/bin/agy",
+        prompt="分析架构",
+        cwd="/tmp",
+        sandbox="read-only",
+        prompt_file="/tmp/p.txt",
+        output_file="/tmp/o.txt",
+    )
+    assert shell_ro is False
+    assert cmd_ro == ["/usr/local/bin/agy", "-p", "分析架构"], cmd_ro
+
+    cmd_rw_no_model, _ = _build_cli_command(
+        agy_spec,
+        "/usr/local/bin/agy",
+        prompt="修改代码",
+        cwd="/tmp",
+        sandbox="workspace-write",
+        prompt_file="/tmp/p.txt",
+        output_file="/tmp/o.txt",
+    )
+    assert cmd_rw_no_model == ["/usr/local/bin/agy", "--dangerously-skip-permissions", "-p", "修改代码"], cmd_rw_no_model
+
+    cmd_rw, shell_rw = _build_cli_command(
+        agy_spec.model_copy(update={"model": "gemini-2.5-pro"}),
+        "/usr/local/bin/agy",
+        prompt="实现功能",
+        cwd="/tmp",
+        sandbox="workspace-write",
+        prompt_file="/tmp/p.txt",
+        output_file="/tmp/o.txt",
+    )
+    assert shell_rw is False
+    assert cmd_rw == [
+        "/usr/local/bin/agy",
+        "--model",
+        "gemini-2.5-pro",
+        "--dangerously-skip-permissions",
+        "-p",
+        "实现功能",
+    ], cmd_rw
+
+    # 2) 含 driver="gemini" 及旧内置覆盖 id="gemini" 的配置文件可正常读取、跳过旧 id="gemini" 且不改写原文件
+    mock_agy_bin = os.path.join(_TEST_DATA_DIR, "mock_agy")
+    with open(mock_agy_bin, "w", encoding="utf-8") as fh:
+        fh.write(f"#!{sys.executable}\nimport json, sys\nprint('AGY_ARGV::' + json.dumps(sys.argv[1:], ensure_ascii=False), flush=True)\n")
+    os.chmod(mock_agy_bin, 0o755)
+
+    legacy_cfg_path = os.path.join(_TEST_DATA_DIR, "legacy_agents.json")
+    legacy_raw = {
+        "agents": [
+            {
+                "id": "gemini",
+                "name": "Gemini CLI Legacy Override",
+                "driver": "gemini",
+                "binary": "/old/path/gemini",
+                "builtin": True,
+            },
+            {
+                "id": "team-gemini-wrapper",
+                "name": "Team Wrapper",
+                "driver": "gemini",
+                "binary": mock_agy_bin,
+            },
+        ]
+    }
+    with open(legacy_cfg_path, "w", encoding="utf-8") as fh:
+        json.dump(legacy_raw, fh, ensure_ascii=False, indent=2)
+    before_bytes = open(legacy_cfg_path, "rb").read()
+
+    old_agy_bin = os.environ.get("CONSOLE_AGY_BIN")
+    os.environ["CONSOLE_AGY_BIN"] = mock_agy_bin
+    try:
+        reg = AgentRegistry(legacy_cfg_path)
+        listed = reg.list_agents()
+        listed_ids = [a.id for a in listed]
+        assert "agy" in listed_ids
+        assert "gemini" not in listed_ids, f"旧覆盖项 id=gemini 应被跳过: {listed_ids}"
+        assert "team-gemini-wrapper" in listed_ids
+
+        wrapper = next(a for a in listed if a.id == "team-gemini-wrapper")
+        assert wrapper.driver == "agy", f"旧 driver=gemini 应自动归一化为 agy，实际: {wrapper.driver}"
+
+        # 3) get_agent("gemini") 与 resolve_available_agent("gemini") 自动别名解析到 agy
+        got = reg.get_agent("gemini")
+        assert got is not None and got.id == "agy"
+        resolved = reg.resolve_available_agent("gemini")
+        assert resolved.id == "agy" and resolved.available is True
+
+        # 确保未改写用户原始配置文件
+        after_bytes = open(legacy_cfg_path, "rb").read()
+        assert before_bytes == after_bytes, "读取兼容不应改写用户原有 agents.json 文件"
+
+        # 拒绝通过 API 新保存已废弃的 id="gemini"（避免保存后被列表跳过造成困惑）
+        r_bad_save = client.post(
+            "/api/agents",
+            json={"id": "gemini", "name": "Old Gemini", "driver": "agy", "binary": "agy"},
+        )
+        assert r_bad_save.status_code == 400, r_bad_save.text
+
+        # 4) 老工作流节点 agent_id="gemini" 端到端运行自动路由到 agy（验证只读与可写参数传递）
+        legacy_wf = {
+            "id": "legacy-gemini-to-agy-flow",
+            "name": "旧版 gemini 节点自动兼容测试",
+            "entry_point": "ro_step",
+            "nodes": [
+                {
+                    "id": "ro_step",
+                    "label": "旧版只读节点",
+                    "kind": "agent",
+                    "agent_id": "gemini",
+                    "sandbox": "read-only",
+                    "capture_git_diff": False,
+                    "prompt_template": "RO_TASK={task}",
+                },
+                {
+                    "id": "rw_step",
+                    "label": "新版可写节点",
+                    "kind": "agent",
+                    "agent_id": "agy",
+                    "sandbox": "workspace-write",
+                    "capture_git_diff": False,
+                    "prompt_template": "RW_TASK={task}",
+                },
+            ],
+            "edges": [
+                {"source": "ro_step", "target": "rw_step"},
+                {"source": "rw_step", "target": "END"},
+            ],
+        }
+        assert client.post("/api/workflows", json=legacy_wf).status_code == 200
+        tid = client.post(
+            "/api/runs",
+            json={"workflow_id": "legacy-gemini-to-agy-flow", "task": "兼容校验"},
+        ).json()["thread_id"]
+        done_st = _wait_for_status(client, tid, {"done"})
+        ro_node = done_st["values"]["nodes"]["ro_step"]
+        rw_node = done_st["values"]["nodes"]["rw_step"]
+        assert ro_node["agent_id"] == "agy"
+        assert 'AGY_ARGV::["-p", "RO_TASK=兼容校验"]' in ro_node["output"], ro_node["output"]
+        assert rw_node["agent_id"] == "agy"
+        assert 'AGY_ARGV::["--dangerously-skip-permissions", "-p", "RW_TASK=兼容校验"]' in rw_node["output"], rw_node["output"]
+    finally:
+        if old_agy_bin is None:
+            os.environ.pop("CONSOLE_AGY_BIN", None)
+        else:
+            os.environ["CONSOLE_AGY_BIN"] = old_agy_bin
+
+    print("[ok] 8/8 Antigravity CLI (agy) 命令构造与旧版 gemini 配置/工作流节点无损兼容验证通过")
 
 
 def main() -> None:
@@ -591,6 +748,7 @@ def main() -> None:
     test_5_natural_language_copilot_and_delete(client)
     asyncio.run(test_6_mcp_server_stdio())
     test_7_quick_create_rename_and_condition_edge_polish(client)
+    test_8_agy_preset_and_gemini_compat(client)
 
 
 if __name__ == "__main__":

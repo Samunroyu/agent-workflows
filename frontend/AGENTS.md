@@ -7,6 +7,14 @@
 - **接口契约唯一来源**：请读取 `../shared/openapi.json`（OpenAPI `2.1.0`）获取所有 REST & SSE API 路径、请求参数与响应 Schema，严格对齐 `frontend/src/types.ts` 与 `frontend/src/api.ts`，不要猜测字段名。
 - 完成后请在项目根目录运行 `.venv/bin/python scripts/check_agent_boundaries.py --role frontend` 和 `npm --prefix frontend run build` 自检零报错（构建产出 `frontend/dist/` 供 `:8080` 直接托管）。
 
+### 1.1 最新契约变更：内置 Gemini CLI → Antigravity CLI (`agy`)
+- **契约说明**：后端已用 Antigravity CLI（`id="agy"`, `name="Antigravity CLI"`, `driver="agy"`, `binary="agy"`）替换原 `gemini` 内置预设（对外 API 接口无增删）。`../shared/openapi.json` 中 `driver` 枚举已更新为 `'codex' | 'claude' | 'kimi' | 'agy' | 'custom'`。
+- **硬性要求**：前端**严禁写死 `gemini`**（可选 Agent 列表动态读取 `GET /api/agents`，驱动枚举严格对齐 `agy`）。
+- **Kimi 必改文件与校验**：
+  1. `frontend/src/types.ts`：将 `AgentDriver` 中的 `'gemini'` 改为 `'agy'`。
+  2. `frontend/src/components/Dialogs.tsx`（约第 898 行驱动 `<select>`）：将 `<option value="gemini">gemini</option>` 改为 `<option value="agy">agy</option>`。
+  3. 完成后执行 `.venv/bin/python scripts/check_agent_boundaries.py --role frontend` 和 `npm --prefix frontend run build` 校验通过。
+
 ---
 
 ## 2. 本轮核心交互重构目标（v2.1 必改项，解决第一期试用痛点）

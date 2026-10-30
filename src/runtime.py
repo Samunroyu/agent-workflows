@@ -28,6 +28,7 @@ from src.agents.registry import (
     AgentRegistry,
     CliExecResult,
     ProcessSupervisor,
+    _canonical_agent_id,
     run_streaming_subprocess,
 )
 from src.registry import (
@@ -176,7 +177,7 @@ class WorkflowRuntimeManager:
                 "status": "running",
                 "runs": run_count,
                 "worker_id": node.worker_id,
-                "agent_id": node.agent_id if node.kind == "agent" else node.kind,
+                "agent_id": _canonical_agent_id(node.agent_id) if node.kind == "agent" else node.kind,
                 "cwd": cwd,
                 "started_at": _now_iso(),
             }

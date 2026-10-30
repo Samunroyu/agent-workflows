@@ -177,7 +177,7 @@ def _build_copilot_prompt(
 
 ### 1. 当前主机已注册的 CLI Agent 列表
 {agents_desc}
-（如果用户点名了某个 Agent 如 codex / claude / kimi / gemini，请在节点的 agent_id 中填写对应 id；未指定时优先使用 available=true 的 Agent id 或 "auto"。）
+（如果用户点名了某个 Agent 如 codex / claude / kimi / agy，请在节点的 agent_id 中填写对应 id；若用户提到 antigravity / agy / gemini，均填写 "agy"；未指定时优先使用 available=true 的 Agent id 或 "auto"。）
 
 ### 2. WorkflowSpec v2 核心规则
 - `id`: 仅含字母、数字、连字符 `-` 或下划线 `_`（如果是修改现有工作流，保持原 `id` 不变；新建工作流则取语义化英文短横线 id）。

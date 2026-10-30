@@ -2,7 +2,7 @@
 
 核心职责：
 1. 默认彻底弃用假 StubAgent；启动时自动扫描本机 PATH（含 /opt/homebrew/bin、/usr/local/bin、~/.local/bin）
-   探测已安装的真实 CLI Agent（Codex / Claude Code / Kimi / Gemini）。
+   探测已安装的真实 CLI Agent（Codex / Claude Code / Kimi / Antigravity）。
 2. 支持用户通过 Web 操作台或 data/agents.json 新增、编辑、删除自定义 CLI 命令模板（custom 驱动）。
 3. 使用 subprocess.Popen(..., start_new_session=True) 实时按行流式采集 stdout/stderr，
    并在 ProcessSupervisor 中按 (thread_id, node_id) 登记进程组，支持任意时刻一键强杀中止整棵子进程树。
@@ -22,11 +22,18 @@ import threading
 import time
 from typing import Callable, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-AgentDriverKind = Literal["codex", "claude", "kimi", "gemini", "custom"]
+AgentDriverKind = Literal["codex", "claude", "kimi", "agy", "custom"]
 SandboxMode = Literal["read-only", "workspace-write"]
 LogCallback = Callable[[str, str], None]  # (stream: "stdout"|"stderr"|"system", line: str) -> None
+
+AGENT_ID_ALIASES: dict[str, str] = {"gemini": "agy"}
+
+
+def _canonical_agent_id(agent_id: str) -> str:
+    cleaned = agent_id.strip()
+    return AGENT_ID_ALIASES.get(cleaned, cleaned)
 
 
 def _augmented_path() -> str:
@@ -63,9 +70,9 @@ class AgentProfileSpec(BaseModel):
     name: str = Field(..., description="显示名称，如 Codex CLI / Claude Code / Kimi CLI")
     driver: AgentDriverKind = Field(
         "custom",
-        description="驱动类型：codex | claude | kimi | gemini | custom（自定义命令模板）",
+        description="驱动类型：codex | claude | kimi | agy | custom（自定义命令模板）",
     )
-    binary: str = Field(..., description="可执行文件名称或绝对路径，如 codex / claude / kimi")
+    binary: str = Field(..., description="可执行文件名称或绝对路径，如 codex / claude / kimi / agy")
     description: str = Field("", description="Agent 用途与特性说明")
     model: Optional[str] = Field(None, description="可选模型覆盖参数（传给 CLI 的 -m / --model）")
     args_template: list[str] = Field(
@@ -82,6 +89,13 @@ class AgentProfileSpec(BaseModel):
     timeout_sec: int = Field(1800, ge=10, le=14400, description="单次执行超时秒数")
     env: dict[str, str] = Field(default_factory=dict, description="附加环境变量（键值对）")
     builtin: bool = Field(False, description="是否为系统内置预设")
+
+    @field_validator("driver", mode="before")
+    @classmethod
+    def _normalize_legacy_driver(cls, v: object) -> object:
+        if isinstance(v, str) and v.strip() == "gemini":
+            return "agy"
+        return v
 
 
 class AgentProfileOut(AgentProfileSpec):
@@ -129,11 +143,11 @@ def builtin_agent_profiles() -> list[AgentProfileSpec]:
             builtin=True,
         ),
         AgentProfileSpec(
-            id="gemini",
-            name="Gemini CLI",
-            driver="gemini",
-            binary=os.environ.get("CONSOLE_GEMINI_BIN", "gemini"),
-            description="Google Gemini CLI 本地非交互研发助手",
+            id="agy",
+            name="Antigravity CLI",
+            driver="agy",
+            binary=os.environ.get("CONSOLE_AGY_BIN", "agy"),
+            description="Google Antigravity CLI 本地非交互研发 Agent",
             builtin=True,
         ),
     ]
@@ -299,12 +313,12 @@ def _build_cli_command(
         cmd += ["-p", prompt]
         return cmd, False
 
-    if profile.driver == "gemini":
+    if profile.driver == "agy":
         cmd = [resolved_bin]
-        if sandbox == "workspace-write":
-            cmd.append("--yolo")
         if profile.model:
-            cmd += ["-m", profile.model]
+            cmd += ["--model", profile.model]
+        if sandbox == "workspace-write":
+            cmd.append("--dangerously-skip-permissions")
         cmd += ["-p", prompt]
         return cmd, False
 
@@ -478,6 +492,7 @@ class AgentRegistry:
         self.config_path = os.path.abspath(config_path)
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
         self._lock = threading.Lock()
+        self._warned_legacy_ids: set[str] = set()
 
     def _load_custom_map(self) -> dict[str, AgentProfileSpec]:
         if not os.path.isfile(self.config_path):
@@ -507,11 +522,19 @@ class AgentRegistry:
             merged: dict[str, AgentProfileSpec] = {p.id: p for p in builtin_agent_profiles()}
             custom_map = self._load_custom_map()
             for aid, spec in custom_map.items():
+                if aid in AGENT_ID_ALIASES:
+                    if aid not in self._warned_legacy_ids:
+                        self._warned_legacy_ids.add(aid)
+                        print(
+                            f"[warn] 跳过自定义配置中已移除的旧预设 id='{aid}'（已由内置 '{AGENT_ID_ALIASES[aid]}' 替代）",
+                            flush=True,
+                        )
+                    continue
                 is_builtin = aid in merged and merged[aid].builtin
                 merged[aid] = spec.model_copy(update={"builtin": is_builtin})
 
         out: list[AgentProfileOut] = []
-        builtin_order = {"codex": 0, "claude": 1, "kimi": 2, "gemini": 3}
+        builtin_order = {"codex": 0, "claude": 1, "kimi": 2, "agy": 3}
         for spec in sorted(merged.values(), key=lambda s: (builtin_order.get(s.id, 10), s.id)):
             resolved = resolve_binary(spec.binary)
             out.append(
@@ -524,20 +547,22 @@ class AgentRegistry:
         return out
 
     def get_agent(self, agent_id: str) -> Optional[AgentProfileOut]:
+        canonical_id = _canonical_agent_id(agent_id)
         for item in self.list_agents():
-            if item.id == agent_id:
+            if item.id == canonical_id:
                 return item
         return None
 
     def resolve_available_agent(self, preferred_id: Optional[str] = None) -> AgentProfileOut:
         """解析指定 Agent；若为 'auto' 或为空则自动选首个本机已安装的 CLI；若所选 CLI 未安装则明确报错（绝不静默退回假 Stub）。"""
+        canonical_id = _canonical_agent_id(preferred_id) if preferred_id else preferred_id
         agents = self.list_agents()
-        if preferred_id and preferred_id != "auto":
-            target = next((a for a in agents if a.id == preferred_id), None)
+        if canonical_id and canonical_id != "auto":
+            target = next((a for a in agents if a.id == canonical_id), None)
             if target is None:
                 available_ids = [a.id for a in agents if a.available]
                 raise ValueError(
-                    f"节点指定的 Agent '{preferred_id}' 未注册。当前可用 CLI Agent: {available_ids or '无'}"
+                    f"节点指定的 Agent '{canonical_id}' 未注册。当前可用 CLI Agent: {available_ids or '无'}"
                 )
             if not target.available:
                 available_ids = [a.id for a in agents if a.available]
@@ -550,12 +575,17 @@ class AgentRegistry:
         first_online = next((a for a in agents if a.available), None)
         if first_online is None:
             raise RuntimeError(
-                "当前主机未探测到任何可用的 CLI Agent（codex / claude / kimi / gemini）。"
+                "当前主机未探测到任何可用的 CLI Agent（codex / claude / kimi / agy）。"
                 "请确认 CLI 已安装并登录，或在操作台『Agent 管理』中添加自定义 CLI 路径。"
             )
         return first_online
 
     def save_agent(self, spec: AgentProfileSpec) -> AgentProfileOut:
+        if spec.id in AGENT_ID_ALIASES:
+            raise ValueError(
+                f"旧预设 ID '{spec.id}' 已移除并自动映射为内置 '{AGENT_ID_ALIASES[spec.id]}'，"
+                f"请直接修改 '{AGENT_ID_ALIASES[spec.id]}' 或使用其他自定义 ID"
+            )
         with self._lock:
             custom_map = self._load_custom_map()
             builtins = {p.id for p in builtin_agent_profiles()}

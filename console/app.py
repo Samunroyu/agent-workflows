@@ -1,7 +1,7 @@
 """工作流操作台后端 API v2：多 CLI Agent 注册 + 可编辑工作流引擎 + 自然语言构图 + 实时流式控场。
 
 核心设计：
-- 默认彻底关闭假 StubAgent，通过 AgentRegistry 自动探测并调用本机已登录的真实 CLI（codex / claude / kimi / gemini / 自定义）
+- 默认彻底关闭假 StubAgent，通过 AgentRegistry 自动探测并调用本机已登录的真实 CLI（codex / claude / kimi / agy / 自定义）
 - 通过 WorkflowRegistry v2 管理四类核心节点（agent / shell / gate / condition）、并行汇聚与条件循环工作流
 - 通过 WorkflowRuntimeManager 提供 per-run 并发、SSE 实时日志流、随时强杀中止、失败节点原地重试、
   人工卡点在线编辑上游产出与自选打回任意上游节点
