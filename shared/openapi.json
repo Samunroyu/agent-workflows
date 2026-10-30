@@ -3,7 +3,7 @@
   "info": {
     "title": "agent-workflows console API",
     "description": "多 Agent 研发协同编排操作台后端 API v2：提供 CLI Agent 管理（/api/agents）、Worker 节点状态（/api/workers）、工作流可视化拓扑增删改与自然语言改图（/api/workflows, /api/workflows/copilot）、以及运行期实时日志流、强杀中止、单节点重试与增强人工卡点（/api/runs/*）。前后端唯一契约文件位于 shared/openapi.json。",
-    "version": "2.0.0"
+    "version": "2.1.0"
   },
   "paths": {
     "/api/health": {
@@ -267,6 +267,142 @@
         }
       }
     },
+    "/api/workflows/create": {
+      "post": {
+        "summary": "一步创建并落盘保存全新的自定义工作流（支持空白画布、复制模板、一句话 AI 生成三种起点，自动生成唯一 ID）",
+        "operationId": "create_workflow_quick_api_workflows_create_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSpec"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/rename-node": {
+      "post": {
+        "summary": "重命名工作流中的节点 ID，并全自动联动更新入口、连线、条件字段与全部 {node_id.xxx} 模板变量引用",
+        "operationId": "rename_node_endpoint_api_workflows_rename_node_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameNodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSpec"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workflows/copilot": {
       "post": {
         "summary": "一句话自然语言生成新工作流或修改当前画布工作流（直接复用本机已登录 CLI Agent）",
@@ -294,6 +430,16 @@
           },
           "400": {
             "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -1232,6 +1378,42 @@
             "title": "Auto Save",
             "description": "生成并校验通过后是否立即落盘保存（默认 false，先返回给前端画布预览，用户确认后点保存）",
             "default": false
+          },
+          "preferred_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Id",
+            "description": "新建工作流时可选指定的目标 workflow_id（留空则自动生成唯一合法 ID）"
+          },
+          "preferred_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Name",
+            "description": "新建工作流时可选指定的显示名称（如『前后端并行评审流』）"
+          },
+          "preferred_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Description",
+            "description": "新建工作流时可选指定的描述文本"
           }
         },
         "type": "object",
@@ -1269,6 +1451,80 @@
           "agent_used"
         ],
         "title": "CopilotResponse"
+      },
+      "CreateWorkflowRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name",
+            "description": "新建工作流显示名称（支持任意中英文，如『前后端并行评审流』）"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "可选：自定义工作流 ID（仅限字母、数字、连字符 - 或下划线 _；留空则由后端自动生成唯一合法 ID）"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "可选：工作流用途说明",
+            "default": ""
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "blank",
+              "template",
+              "ai"
+            ],
+            "title": "Mode",
+            "description": "创建起点模式：blank（空白画布，含 1 个起始节点）| template（复制现有工作流模板）| ai（一句话 AI 生成初版拓扑）",
+            "default": "blank"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id",
+            "description": "当 mode='template' 时指定要复制的源 workflow_id"
+          },
+          "ai_instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Instruction",
+            "description": "当 mode='ai' 时填写的一句话流程描述（如『先让 Codex 写方案并人工审批，通过后前后端并行开发再跑测试』）"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "description": "当 mode='ai' 时用于构图的本地 CLI Agent ID（默认 'auto'）",
+            "default": "auto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateWorkflowRequest"
       },
       "DebugThreadsOut": {
         "properties": {
@@ -2091,6 +2347,34 @@
           "kind"
         ],
         "title": "NodeSpec"
+      },
+      "RenameNodeRequest": {
+        "properties": {
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowSpec",
+            "description": "当前画布工作流定义"
+          },
+          "old_node_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Old Node Id",
+            "description": "原节点 ID"
+          },
+          "new_node_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "New Node Id",
+            "description": "新节点 ID（自动联动更新入口、所有进出连线、审批审阅/打回列表与全部 {node_id.xxx} 模板引用）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workflow",
+          "old_node_id",
+          "new_node_id"
+        ],
+        "title": "RenameNodeRequest"
       },
       "ResumeIn": {
         "properties": {

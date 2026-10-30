@@ -30,6 +30,7 @@ from src.registry import (
     WorkflowSpec,
     build_state_graph,
     compute_upstream_ancestors,
+    rename_workflow_node,
 )
 from src.runtime import RunLogEntry, RunStatus, WorkflowRuntimeManager
 
@@ -56,7 +57,7 @@ _runtime = WorkflowRuntimeManager(
 
 app = FastAPI(
     title="agent-workflows console API",
-    version="2.0.0",
+    version="2.1.0",
     description=(
         "多 Agent 研发协同编排操作台后端 API v2：提供 CLI Agent 管理（/api/agents）、Worker 节点状态（/api/workers）、"
         "工作流可视化拓扑增删改与自然语言改图（/api/workflows, /api/workflows/copilot）、"
@@ -208,6 +209,45 @@ class ValidateWorkflowOut(BaseModel):
     upstream_map: dict[str, list[str]] = Field(
         default_factory=dict,
         description="每个节点可引用的上游节点 ID 列表（供前端 Prompt 编辑器提示 {节点ID.output} / {节点ID.diff} 变量）",
+    )
+
+
+CreateWorkflowMode = Literal["blank", "template", "ai"]
+
+
+class CreateWorkflowRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="新建工作流显示名称（支持任意中英文，如『前后端并行评审流』）")
+    id: Optional[str] = Field(
+        None,
+        description="可选：自定义工作流 ID（仅限字母、数字、连字符 - 或下划线 _；留空则由后端自动生成唯一合法 ID）",
+    )
+    description: str = Field("", description="可选：工作流用途说明")
+    mode: CreateWorkflowMode = Field(
+        "blank",
+        description="创建起点模式：blank（空白画布，含 1 个起始节点）| template（复制现有工作流模板）| ai（一句话 AI 生成初版拓扑）",
+    )
+    template_id: Optional[str] = Field(
+        None,
+        description="当 mode='template' 时指定要复制的源 workflow_id",
+    )
+    ai_instruction: Optional[str] = Field(
+        None,
+        description="当 mode='ai' 时填写的一句话流程描述（如『先让 Codex 写方案并人工审批，通过后前后端并行开发再跑测试』）",
+    )
+    agent_id: str = Field(
+        "auto",
+        description="当 mode='ai' 时用于构图的本地 CLI Agent ID（默认 'auto'）",
+    )
+
+
+class RenameNodeRequest(BaseModel):
+    workflow: WorkflowSpec = Field(..., description="当前画布工作流定义")
+    old_node_id: str = Field(..., min_length=1, description="原节点 ID")
+    new_node_id: str = Field(
+        ...,
+        min_length=1,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        description="新节点 ID（自动联动更新入口、所有进出连线、审批审阅/打回列表与全部 {node_id.xxx} 模板引用）",
     )
 
 
@@ -471,9 +511,80 @@ def validate_workflow(spec: WorkflowSpec) -> dict[str, Any]:
 
 
 @app.post(
+    "/api/workflows/create",
+    response_model=WorkflowSpec,
+    responses={400: {"model": ErrorOut}, 404: {"model": ErrorOut}, 409: {"model": ErrorOut}, 503: {"model": ErrorOut}},
+    summary="一步创建并落盘保存全新的自定义工作流（支持空白画布、复制模板、一句话 AI 生成三种起点，自动生成唯一 ID）",
+)
+def create_workflow_quick(body: CreateWorkflowRequest) -> Any:
+    clean_name = body.name.strip()
+    if not clean_name:
+        return JSONResponse({"error": "工作流名称不能为空"}, status_code=400)
+    try:
+        if body.mode == "blank":
+            return _registry.create_blank_workflow(
+                name=clean_name,
+                preferred_id=body.id,
+                description=body.description,
+            )
+        if body.mode == "template":
+            tpl_id = (body.template_id or "").strip()
+            if not tpl_id:
+                return JSONResponse({"error": "选择『复制现有模板』时必须指定 template_id"}, status_code=400)
+            return _registry.create_from_template(
+                template_id=tpl_id,
+                name=clean_name,
+                preferred_id=body.id,
+                description=body.description,
+            )
+        if body.mode == "ai":
+            instr = (body.ai_instruction or "").strip()
+            if len(instr) < 2:
+                return JSONResponse({"error": "选择『一句话 AI 生成』时请填写至少 2 个字符的流程描述"}, status_code=400)
+            cp_res = generate_or_modify_workflow(
+                CopilotRequest(
+                    instruction=instr,
+                    current_workflow=None,
+                    agent_id=body.agent_id,
+                    auto_save=True,
+                    preferred_id=body.id,
+                    preferred_name=clean_name,
+                    preferred_description=body.description,
+                ),
+                agent_registry=_agent_registry,
+                workflow_registry=_registry,
+            )
+            return cp_res.workflow
+        return JSONResponse({"error": f"不支持的创建模式: {body.mode}"}, status_code=400)
+    except FileExistsError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post(
+    "/api/workflows/rename-node",
+    response_model=WorkflowSpec,
+    responses={400: {"model": ErrorOut}, 404: {"model": ErrorOut}},
+    summary="重命名工作流中的节点 ID，并全自动联动更新入口、连线、条件字段与全部 {node_id.xxx} 模板变量引用",
+)
+def rename_node_endpoint(body: RenameNodeRequest) -> Any:
+    try:
+        return rename_workflow_node(body.workflow, body.old_node_id, body.new_node_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post(
     "/api/workflows/copilot",
     response_model=CopilotResponse,
-    responses={400: {"model": ErrorOut}, 503: {"model": ErrorOut}},
+    responses={400: {"model": ErrorOut}, 409: {"model": ErrorOut}, 503: {"model": ErrorOut}},
     summary="一句话自然语言生成新工作流或修改当前画布工作流（直接复用本机已登录 CLI Agent）",
 )
 def workflow_copilot(body: CopilotRequest) -> Any:
@@ -483,6 +594,8 @@ def workflow_copilot(body: CopilotRequest) -> Any:
             agent_registry=_agent_registry,
             workflow_registry=_registry,
         )
+    except FileExistsError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
     except Exception as exc:  # noqa: BLE001

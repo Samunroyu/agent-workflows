@@ -1,120 +1,140 @@
-# Frontend Agent 规范 v2（仅限 Kimi 维护）
+# Frontend Agent 规范 v2.1（仅限 Kimi 维护）
 
 本目录（`frontend/`）为 `agent-workflows` 多 Agent 研发协同编排操作台的前端工程，**100% 由 Kimi 负责编写与维护**。
 
 ## 1. 边界约束
 - **只允许修改 `frontend/` 目录内的文件**；可只读 `../shared/openapi.json` 与项目规则文件，严禁修改上级目录的 Python 后端代码（`../src/`、`../console/` 等）。
-- **接口契约唯一来源**：请读取 `../shared/openapi.json`（OpenAPI `2.0.0`）获取所有 REST & SSE API 路径、请求参数与响应 Schema，严格对齐 `frontend/src/types.ts` 与 `frontend/src/api.ts`，不要猜测字段名。
-- 完成后请在项目根目录运行 `python scripts/check_agent_boundaries.py --role frontend` 和 `npm --prefix frontend run build` 自检零报错。
+- **接口契约唯一来源**：请读取 `../shared/openapi.json`（OpenAPI `2.1.0`）获取所有 REST & SSE API 路径、请求参数与响应 Schema，严格对齐 `frontend/src/types.ts` 与 `frontend/src/api.ts`，不要猜测字段名。
+- 完成后请在项目根目录运行 `.venv/bin/python scripts/check_agent_boundaries.py --role frontend` 和 `npm --prefix frontend run build` 自检零报错（构建产出 `frontend/dist/` 供 `:8080` 直接托管）。
 
 ---
 
-## 2. 技术选型与核心架构升级目标
+## 2. 本轮核心交互重构目标（v2.1 必改项，解决第一期试用痛点）
 
-- **框架与构建**：React 18+ + TypeScript + Vite（`vite.config.ts` 将 `/api` 代理到 `http://127.0.0.1:8080`，`build.outDir` 保持为 `dist`）。
-- **样式与图标**：Tailwind CSS + 自定义语义 CSS 变量 + `lucide-react`。
-- **交互式编排画布**：`@xyflow/react`（React Flow）。
-  - **重要改造**：旧版画布写死了只读 `nodesDraggable={false}` / `nodesConnectable={false}` 且详情页写死了 `plan / patch / test / review` 四个固定 Tab。**新版必须彻底移除只读限制与固定四阶段 Tab**，升级为支持**可视化自由增删改节点与连线 + 一句话自然语言改图 + 点击画布任意节点查看实时流式日志/产出/Diff + 增强型人工控场**的完整操作台！
-
----
-
-## 3. 核心功能与接口对接清单（严格对齐 `../shared/openapi.json` v2.0.0）
-
-### 3.1 顶部状态栏与 CLI Agent 管理弹窗
-1. **健康与在线 Agent 状态胶囊**：
-   - 调用 `GET /api/health` 与 `GET /api/agents` 展示当前就绪的真实本地 CLI Agent 数量与列表（如 `codex, claude 在线`，注意后端已彻底移除假 `StubAgent`）。
-   - 点击顶部「Agent 管理」按钮打开原生 `<dialog>`：
-     - 展示 `GET /api/agents` 返回的所有内置预设（`codex` / `claude` / `kimi` / `gemini`）及自定义 CLI 的 `available` 状态与探测到的二进制路径 `resolved_path`。
-     - 支持新增或编辑 CLI Agent（调用 `POST /api/agents`，可配置 `id`、`name`、`driver`、`binary`、`model`、`args_template` / `command_template`、`timeout_sec`），以及删除自定义 Agent（`DELETE /api/agents/{agent_id}`）。
-
-### 3.2 可视化工作流编辑器（编辑态）与一句话自然语言改图
-当未选中具体运行记录（或用户切换到「编排编辑」模式）时，主工作区进入**可编辑工作流画布模式**：
-
-1. **工作流管理栏**：
-   - 下拉切换工作流（`GET /api/workflows`）。
-   - **新建工作流**：初始化一个带默认入口节点的可编辑草稿。
-   - **复制工作流**：基于当前 `WorkflowSpec` 克隆新 ID。
-   - **工作流设置（名称 / 描述 / 自定义启动入参 `WorkflowSpec.inputs`）**：允许用户增删改该工作流的启动表单字段（`WorkflowInputSpec`：`key`、`label`、`kind`、`required`、`default`、`placeholder`；默认仅保留 `task` 必填即可一键开跑）。
-   - **保存工作流**：调用 `POST /api/workflows`（或 `PUT /api/workflows/{workflow_id}`），在有未保存改动时显示醒目的“未保存更改”提示与「保存」按钮；保存前或节点变更时可调用 `POST /api/workflows/validate` 实时校验拓扑合法性并获取 `upstream_map`。
-   - **删除工作流**：调用 `DELETE /api/workflows/{workflow_id}`（所有工作流均可删除，删除前二次确认）。
-
-2. **一句话自然语言生成/修改工作流（AI 改图栏）**：
-   - 在画布上方提供显式关联 `<label>` 的自然语言输入栏（例如占位提示：`输入一句话生成或改图，如：在测试后加一个 Claude 审查节点，或改成前后端并行开发…`）+ 可选 CLI 选择器（默认 `auto`）+「AI 构图」按钮。
-   - 提交时调用 `POST /api/workflows/copilot`，请求体 `{ instruction, current_workflow, agent_id, auto_save: false }`（新建空白时 `current_workflow` 传 `null`，修改当前图时传当前画布上的 `WorkflowSpec`）。
-   - 接口返回 `{ workflow, summary, agent_used }` 后，立即将新 `workflow` 渲染到画布上并标记为待保存草稿（同时支持一键「撤销本次 AI 改图」或点击「保存」落盘），Toast 展示 `summary`。
-
-3. **画布交互式节点增删与并行/条件连线（React Flow）**：
-   - 在编辑态开启 `nodesDraggable={true}`、`nodesConnectable={true}`、`elementsSelectable={true}`，同步节点拖拽后的 `position: { x, y }` 到草稿 `WorkflowSpec.nodes`。
-   - **节点工具栏（一键添加四类标准节点）**：
-     - `+ Agent 节点` (`kind: "agent"`)：绑定 CLI Agent 执行编码、分析或审查。
-     - `+ Shell 命令` (`kind: "shell"`)：执行构建、测试、Git 同步等脚本。
-     - `+ 人工卡点` (`kind: "gate"`)：暂停等待人工审批、在线改产出或指定节点打回。
-     - `+ 条件判断` (`kind: "condition"`)：根据上游 `ok` / `exit_code` / `runs` / `output` 分支路由或循环重试。
-     - 画布自动渲染虚拟 `END`（结束）目标节点以便用户将终末节点拖线连向 `END`，并在入口节点（`workflow.entry_point`）上展示醒目的「入口 (START)」徽章。
-   - **连线与删除**：
-     - 从任意节点拖线连接到另一节点（或 `END`）时新增一条 `EdgeSpec`（**从同一节点拉出多条普通无条件边即构成并行分支 Fan-out**！）。
-     - 选中任意节点或连线后，可通过右侧属性面板的「删除节点 / 删除连线」按钮删除（删除节点时一并清理关联的 `edges`，若删的是 `entry_point` 则自动顺延或提示重设入口）。
-
-4. **编辑态右侧属性配置抽屉（选中节点或连线时展示）**：
-   - **选中节点（`NodeSpec`）时**：
-     - 通用字段：节点 ID、显示名称 `label`、职责描述 `description`、「设为入口节点 (`entry_point`)」按钮、多入边汇聚策略 `join_mode`（`auto` 自动识别并行汇聚 | `all` 等待全部并行分支完成 | `any` 任一到达即触发）、循环上限 `max_runs`。
-     - 当 `kind === "agent"` 时：
-       - 执行主机 `worker_id`（下拉读取 `GET /api/workers`，一期为 `local`）。
-       - CLI Agent `agent_id`（下拉读取 `GET /api/agents`，展示 `auto` 及各 CLI 的在线/未安装状态）。
-       - 工作目录 `cwd`（可填子目录如 `frontend`、绝对路径或 `{inputs.repo}`）。
-       - 沙箱权限 `sandbox`（`read-only` 只读分析 | `workspace-write` 允许读写代码）与 `capture_git_diff` 开关。
-       - `prompt_template` 多行编辑器 + **快捷插入变量胶囊按钮**：提供 `{task}`、`{feedback}`、各 `{inputs.<key>}`，以及根据上游节点自动列出的 **`{<上游节点ID>.output}`**、**`{<上游节点ID>.diff}`**、**`{<上游节点ID>.stdout}`**，点击胶囊直接插入到 Prompt 光标处！
-     - 当 `kind === "shell"` 时：
-       - 执行主机 `worker_id`、工作目录 `cwd`、`command` 命令模板（同样提供上游变量胶囊快捷插入）、`continue_on_error` 开关、超时时间 `timeout_sec`。
-     - 当 `kind === "gate"` 时：
-       - 审批提示说明 `instruction`、重点审阅的上游节点多选 `review_nodes`、**`allow_edit_output` 开关（允许审批人直接在线编辑修改上游产出）**、允许打回的目标上游节点多选 `rewind_targets`。
-     - 当 `kind === "condition"`（或选中某条出边 `EdgeSpec`）时：
-       - 可视化编辑该节点各条出边的条件规则：目标节点 `target`、连线标签 `label`、是否为兜底分支 `is_default`，以及条件表达式 `condition`（`field` 支持下拉选上游节点的 `<node_id>.ok` / `<node_id>.exit_code` / `<node_id>.runs` / `<node_id>.output`，`op` 支持 `== | != | < | <= | > | >= | contains | not_contains | regex | truthy | falsy`，`value` 常量值）。
+第一期试用暴露了两个核心体验问题，本轮必须彻底重构到位：
+1. **解决「无法顺畅新建自定义工作流」问题**：旧版点「新建」弹出的其实是复杂的底层入参设置框，且点「保存设置」只改前端内存根本没调后端落盘（不额外点画布保存就会丢失，也不会出现在运行弹窗里）。**新版必须提供独立的「+ 新建工作流」极简弹窗，对接新增的 `POST /api/workflows/create` 接口一步创建并落盘保存！**
+2. **解决「所有内容堆在同一个长页面、编辑节点只能缩在右侧 350px 窄栏里极难操作」问题**：
+   - **页面拆分为两个真正的独立全屏一级视图**（「工作流编排页」与「运行监控中心」），彻底废除单页上下滚动大杂烩！
+   - **彻底取消右侧常驻 350px 窄属性栏**，让画布 100% 全宽全高铺开；无论是编排态编辑节点/连线，还是运行态查看实时终端日志/Git Diff/人工卡点在线改产出，**一律改为在屏幕正中央弹出大尺寸居中工作台弹窗（宽 ~940px~990px，支持一键最大化）放大到用户面前操作！**
 
 ---
 
-### 3.3 动态启动弹窗与运行期实时控场（运行监控态）
+## 3. 核心架构、视图拆分与接口对接清单（严格对齐 `../shared/openapi.json` v2.1.0）
 
-1. **动态「发起新运行」弹窗（`<dialog>`）**：
-   - 选择要运行的 `workflow_id` 后，**动态根据该工作流的 `WorkflowSpec.inputs` 数组渲染表单项**（支持 `textarea`、`text`、`path`、`number`、`boolean`、`select`）。
-   - 默认工作流只需填一句必填的 `task`（任务描述）即可直接点击「创建并运行」，调用 `POST /api/runs` 传入 `{ workflow_id, task, inputs }`。
+### 3.1 两个独立一级全屏视图（废除单页 `scrollIntoView`）
 
-2. **运行监控态画布与点击节点看详情（彻底取代写死的旧版 4 个 Tab）**：
-   - 选中某条运行记录（`RunStateOut`）时，画布实时高亮各节点状态：
-     - `running_nodes` 中的节点：脉冲动画高亮（**支持多个并行节点同时高亮“执行中”**）。
-     - `status === "waiting"` / `"error"` / `"cancelled"` 时 `next` 中的节点：醒目停靠高亮（待审批 / 失败断点 / 已强杀断点）。
-     - `values.nodes[nodeId]` 中已执行节点：展示状态角标与已执行次数 `runs`（如 `×2`），若 `edited_by_human === true` 显示「人工已修订」标记。
-   - **点击画布上的任意节点**，右侧详情面板立即切换展示该节点的运行数据（结合 `values.nodes[selectedNodeId]` 与实时日志）：
-     - **实时终端日志 Tab**：通过 `EventSource('/api/runs/' + threadId + '/stream?after_seq=...')` 订阅 SSE 实时日志流（并在历史/切换节点时配合 `GET /api/runs/{tid}/logs?node_id=...`），CLI 执行期间毫秒级逐行滚动显示输出！
-     - **节点产出 Tab (`output`)**：展示该节点的结构化输出文本（若被人工在线编辑过则标注）。
-     - **代码变更 Tab (`diff`)**：若 `diff` 非空，使用语法着色的 `+/-` Git Diff 视图展示。
+使用显式视图状态 `activeView: 'editor' | 'runs'` 控制左侧导航栏切换：
 
-3. **三大运行期人工控场操作**：
-   - **运行中随时强杀中止**：当 `run.status === "running"` 时，右侧面板顶部与运行列表提供醒目的红色「强杀中止」按钮，调用 `POST /api/runs/{tid}/cancel` 立即杀掉后端活跃子进程组。
-   - **失败/被中止节点原地重试（支持临时改参）**：当 `run.status` 为 `"error"`、`"cancelled"` 或 `"interrupted"` 时，提供「原地重试该节点」按钮（调用 `POST /api/runs/{tid}/retry`），并支持展开“重试前临时调整参数”（可临时覆盖本次重试节点的 `agent_id`、`cwd`、`prompt_template` 或 `command`），无需从头重跑已完成的上游节点！
-   - **增强型人工卡点审批卡片（当 `run.status === "waiting"` 且 `interrupts` 非空时置顶展示）**：
-     - 展示 `interrupt.label`、`interrupt.instruction` 以及 `interrupt.upstream_outputs` 中各上游节点的 `output` 与 `diff`。
-     - **直接在线修改上游产出**：当 `interrupt.allow_edit_output === true` 时，上游节点的 `output` 旁提供「在线编辑内容」切换按钮，用户可直接修改方案/契约文本；点击「确认并继续 (`approve`)」时，将修改后的内容放入 `POST /api/runs/{tid}/resume` 的 `edited_outputs: { [nodeId]: editedText }` 一并提交！
-     - **自选打回到任意上游节点**：提供显式关联 `<label>` 的「打回目标节点 (`target_node_id`)」下拉框（选项来自 `interrupt.rewind_options`，例如在并行汇聚后的验收卡点，可单独选择只打回给 `前端模块实现` 或只打回给 `后端模块实现`）+ `feedback` 意见输入框 +「打回重跑 (`revise`)」按钮 +「中止运行 (`abort`)」按钮。
+1. **视图一：`工作流编排页`（`activeView === 'editor'`，默认首页，沉浸式全屏画布工作台）**
+   - **彻底移除**该视图中的「早上好」欢迎横幅、3 个统计卡片、底部的运行记录列表，以及**彻底移除右侧常驻窄属性栏（`WorkflowInspector` 不再作为右侧分栏渲染）**。
+   - 主体采用 `100dvh` 沉浸式布局：上方仅保留紧凑的工作流管理栏 + 一句话 AI 改图栏 + 节点添加工具栏，下方 **React Flow 画布横向 100% 铺满、纵向撑满剩余全部屏幕高度**。
+   - 点击工具栏「试运行 / 发起运行」并成功创建运行后，自动切换到 `activeView = 'runs'` 并打开该次运行监控。
+
+2. **视图二：`运行监控中心`（`activeView === 'runs'`，独立盯盘与人工审批中心）**
+   - 展示紧凑运行统计条、搜索/待审批筛选、左侧紧凑运行记录列表（或顶部运行切换栏）+ **右侧全宽实时运行拓扑画布**（同样不设右侧 350px 常驻窄详情栏）。
+   - 顶部面包屑或左栏导航可随时一键切回 `工作流编排页`（保持当前正在编辑的工作流上下文不丢失）。
+
+3. **顶部状态栏与 CLI Agent 管理弹窗（两视图共用精简顶栏）**
+   - 展示在线 CLI Agent 状态胶囊（`GET /api/health`、`GET /api/agents`）、「Agent 管理」弹窗按钮（`POST /api/agents`、`DELETE /api/agents/{agent_id}`）、待审批提醒铃铛（点击自动切到 `runs` 视图并打开待审批运行）。
+
+---
+
+### 3.2 全新独立「+ 新建工作流」一键落盘弹窗（对接 `POST /api/workflows/create`）
+
+1. **显著入口与专属弹窗 `CreateWorkflowDialog`（原生 `<dialog>`）**：
+   - 在编排页工作流下拉框旁放置醒目的 **`+ 新建工作流`** 按钮，点击打开专属的 **`CreateWorkflowDialog`**（严禁再复用带底层 `inputs` 字段配置的 `WorkflowSettingsDialog`！）。
+   - 表单内容极简直观：
+     - **工作流名称 (`name`)**：必填，自动聚焦，支持任意中文名称（如 `前后端并行验收流`）。
+     - **创建起点 (`mode`)**（三选一）：
+       1. `blank`（默认选中）：**空白画布**（含 1 个默认起始节点，进去自由拖拽增删）；
+       2. `ai`：**一句话 AI 生成新工作流**（选中时展开 `ai_instruction` 多行输入框 + 可选构图 CLI `agent_id`，默认 `auto`）；
+       3. `template`：**复制现有工作流模板**（选中时展开 `template_id` 下拉框选择要克隆的源工作流）。
+     - **工作流描述 (`description`)**：选填。
+     - **自定义工作流 ID (`id`)**：收进默认折叠的 `<details><summary>高级：自定义工作流 ID（选填，留空自动生成）</summary>` 中，绝不强迫用户手写英文正则 ID！
+   - **一步落盘行为**：
+     - 点击「立即创建」直接调用 **`POST /api/workflows/create`**，传入 `{ name, id: id || null, description, mode, template_id, ai_instruction, agent_id }`。
+     - 后端一次性完成创建/克隆/AI 构图、拓扑校验与写盘保存，返回已落盘的 `WorkflowSpec`。
+     - 前端收到返回后立即刷新 `GET /api/workflows` 列表，并将当前画布切换到新返回的 `workflow.id`！新建后无需二次点保存，立即可在「发起新运行」中看到并启动，切换或刷新页面绝不丢失。
+
+2. **「工作流设置」弹窗 (`WorkflowSettingsDialog`) 保存逻辑修正**：
+   - 工具栏的「设置」按钮仅用于修改当前工作流的名称、描述与启动表单入参定义（`WorkflowSpec.inputs`）。
+   - 在该弹窗点击「保存设置」时，合并到当前 `draft` 后应**直接调用 `PUT /api/workflows/{workflow_id}` 同步落盘保存**（若拓扑校验未通过则明确报错提示），彻底消除“在设置弹窗点了保存却没真正保存”的割裂感。
+
+---
+
+### 3.3 编排态「节点 / 连线放大编辑工作台弹窗」（放大到面前操作！）
+
+彻底取消右侧窄栏，所有节点与连线的深度编辑都在屏幕正中央的大尺寸原生 `<dialog>` 中完成：
+
+1. **画布点选、拖拽与打开放大弹窗的触发手感（`FlowCanvas.tsx`）**：
+   - **开启滚轮/触控板缩放**：React Flow 必须设置 **`zoomOnScroll={true}`**（移除旧版 `zoomOnScroll={false}`）。
+   - **固定左右连线端口防乱跳**：所有节点的 `targetPosition` 固定为 `Position.Left`、`sourcePosition` 固定为 `Position.Right`（彻底移除按 `y` 坐标比较动态切到 `Top`/`Bottom` 导致拖拽偏离 1px 连线端口就上下乱跳的旧逻辑）。
+   - **单击 vs 双击/编辑按钮**：
+     - **单击**节点或连线：仅高亮选中（方便直接拖拽移动位置、拖连接点拉线、按 `Delete` / `Backspace` 键删除）。
+     - **节点卡片内嵌「编辑」按钮**：在每个实际节点卡片（非虚拟 `START`/`END`）右上角或底部提供清晰的 `编辑` 小按钮（点击阻止冒泡并打开该节点放大弹窗）。
+     - **双击节点（`onNodeDoubleClick`）或点击节点卡片上的「编辑」按钮**：立即在屏幕正中央打开 **`NodeEditorDialog`**！
+     - **双击连线（`onEdgeDoubleClick`）**（或在条件节点的分支列表中点击某条出边）：立即在屏幕正中央打开 **`EdgeEditorDialog`**！
+
+2. **大尺寸节点编辑工作台弹窗 `NodeEditorDialog`（原生 `<dialog>`）内部降噪布局**：
+   - **弹窗尺寸**：默认宽 `min(58rem, calc(100vw - 2.5rem))`（约 `928px`），最大高 `calc(100dvh - 2.5rem)`；右上角配备**「最大化 / 还原」切换按钮**（最大化时宽 `calc(100vw - 1.5rem)`、高 `calc(100dvh - 1.5rem)`）。
+   - **弹窗顶栏**：节点类型徽章 + 节点名称标题 + 快捷操作（「设为入口节点 `START`」、「删除节点」、可选的上下游相邻节点快速切换按钮、「最大化」、「完成关闭」）。
+   - **第一区：核心属性区（紧凑横向 2~4 列网格，直观无干扰）**
+     - `agent` 节点：`节点名称 (label)`、`CLI Agent (agent_id)`、`工作目录 (cwd)`、`沙箱权限 (sandbox)`。
+     - `shell` 节点：`节点名称 (label)`、`工作目录 (cwd)`、`出错后继续 (continue_on_error)`。
+     - `gate` 节点：`节点名称 (label)`、`允许审批人在线修改产出 (allow_edit_output)`、`重点审阅的上游节点 (review_nodes)`、`允许打回的上游节点 (rewind_targets)`。
+     - `condition` 节点：`节点名称 (label)` + 下方直观展示并可直接增删改该节点的所有出边条件分支（目标节点 `target`、判断字段 `field`、运算符 `op`、比较值 `value`、兜底开关 `is_default`）。
+   - **第二区：超大号主编辑区（占据弹窗主体视觉空间！）**
+     - 针对 `agent` 的 **`prompt_template`（提示词模板）**、`shell` 的 **`command`（Shell 脚本命令）**、`gate` 的 **`instruction`（审批指引说明）**：
+       - 正上方紧贴摆放**一键插入光标处的变量胶囊栏**：`{task}`、`{feedback}`、各 `{inputs.<key>}`，以及由 `upstream_map` 自动推导出的 `{<上游节点ID>.output}`、`{<上游节点ID>.diff}`、`{<上游节点ID>.stdout}`。
+       - 编辑器 `<textarea>` 默认高度至少 **`18rem ~ 22rem`（约 15~18 行以上）**，最大化模式下自动撑高，代码/提示词采用清晰等宽或高可读字体，让编写长段多 Agent 协同 Prompt 像在专业编辑器里一样宽敞顺手！
+   - **第三区：默认折叠的「高级设置」(`<details>`)**
+     - 将低频技术参数收进 `<details>` 折叠面板，保持主界面清爽：
+       - **重命名节点 ID**：提供新节点 ID 输入框 +「应用新 ID」按钮，调用新增接口 **`POST /api/workflows/rename-node`**（传入 `{ workflow: draft, old_node_id, new_node_id }`），直接用后端返回的已全图联动更新（含 `entry_point`、所有 `edges`、`review_nodes`、`rewind_targets` 与全部 `{节点ID.xxx}` 模板引用）的 `WorkflowSpec` 更新画布草稿！
+       - 执行主机 `worker_id`（读取 `GET /api/workers`）、多入边汇聚策略 `join_mode`（`auto | all | any`）、自动循环上限 `max_runs`、超时秒数 `timeout_sec`、抓取 Git Diff `capture_git_diff`、节点职责描述 `description`。
+
+3. **连线编辑弹窗 `EdgeEditorDialog`（原生 `<dialog>`）条件表单降噪**：
+   - 当连线的来源节点 **不是** `condition` 节点（且该边原本没有非空 `condition.field`）时：**默认只展示简洁的「来源节点 -> 目标节点 `target`、连线标签 `label`、删除连线」**（可通过「高级：按条件路由此连线」开关按需展开条件配置），确保普通边和并行边的 `condition` 严格保持 `null`。
+   - 当来源节点是 `condition` 节点时：展示完整的条件路由配置；**一旦勾选 `兜底分支 (is_default = true)`，立即将 `condition` 置为 `null` 并隐藏条件字段输入**，杜绝残留空的 `{ field: "" }`。
+
+---
+
+### 3.4 运行监控中心与「运行详情 / 人工审批放大工作台弹窗」
+
+在 `activeView === 'runs'`（运行监控中心）中，同样遵循**全宽画布 + 放大到面前操作**的一致体验：
+
+1. **全宽运行监控画布 + 顶部醒目状态横幅**：
+   - 画布全宽展示实时运行进度：`running_nodes` 脉冲高亮（支持多并行分支同时高亮）、已完成节点展示执行次数 `runs` 与 `人工已修订` 标记、`waiting` / `error` / `cancelled` 停靠节点醒目高亮。
+   - 每个运行节点卡片内提供直观小按钮（如待审批卡点显示「立即审批」，失败节点显示「重试 / 日志」，普通节点显示「查看日志」）。
+   - 当 `run.status === 'waiting'`（人工卡点待审批）或 `'error' | 'cancelled' | 'interrupted'`（异常/强杀断点）时，画布上方显示醒目控场提示条，提供一键「打开人工审批工作台」/「打开断点重试工作台」按钮（运行中 `running` 则在顶栏提供醒目红色「强杀中止」按钮调用 `POST /api/runs/{tid}/cancel`）。
+
+2. **居中大尺寸运行节点与审批工作台弹窗 `RunNodeWorkbenchDialog`（原生 `<dialog>`）**：
+   - **触发方式**：双击运行画布上的任意节点、点击节点卡片上的「查看日志 / 立即审批 / 重试」按钮，或点击画布顶部的待审批/重试横幅按钮（当刚进入一个处于 `waiting` 状态的人工卡点运行时，也可直接支持一键弹出）。
+   - **弹窗尺寸**：默认宽 `min(62rem, calc(100vw - 2.5rem))`（约 `992px`），同样配备右上角**「最大化 / 还原」按钮**，并支持在弹窗顶部快捷切换查看同一次运行的其它节点。
+   - **宽屏舒适排布**：
+     - **若当前处于人工卡点待审批（`run.status === 'waiting'` 且 `interrupts` 非空）**：
+       - 在大窗口内宽敞展示审批说明 `interrupt.instruction` 与各上游节点产出快照（`interrupt.upstream_outputs`）；
+       - 点击「在线编辑内容」可在宽大的多行编辑器（`min-height: 14rem`）中直接修订上游方案/契约文本，点击「确认并继续 (`approve`)」通过 `POST /api/runs/{tid}/resume` 的 `edited_outputs` 提交；
+       - 同屏清晰提供「打回目标节点 (`target_node_id`)」下拉框（来自 `interrupt.rewind_options`）+ `feedback` 意见框 +「打回重跑 (`revise`)」与「中止运行 (`abort`)」。
+     - **若当前处于失败/强杀断点（`error | cancelled | interrupted`）**：
+       - 提供「原地重试该节点」（`POST /api/runs/{tid}/retry`）及宽敞的临时参数覆盖编辑器（可临时改 `agent_id`、`cwd`、`prompt_template` 或 `command` 后原地重跑）。
+     - **三大运行详情 Tab（`实时日志` | `节点产出` | `Git Diff`）**：
+       - `实时日志`：高可视高度（至少 `20rem ~ 26rem`）的深色终端 `<pre tabIndex={0}><code>`，通过 `EventSource('/api/runs/' + tid + '/stream?after_seq=...')` + `GET /api/runs/{tid}/logs?node_id=...` 毫秒级流式滚动输出；
+       - `节点产出`：宽幅清晰展示完整结构化 `output`；
+       - `Git Diff`：宽幅 `+/-` 着色代码差异视图，不再缩在 350px 窄栏里反复横滑。
 
 ---
 
 ## 4. 现代 Web 研发与无障碍规范（必须继续严格遵守）
 
-在编写或重构 `frontend/` 下的所有新组件（画布工具栏、节点抽屉、AI 改图栏、Agent 管理弹窗、动态启动表单、实时日志终端、增强审批卡片）时，**必须持续遵守以下规范**：
-
-### 4.1 原生浮层与模态框
-- 所有模态弹窗（新建运行、Agent 管理、工作流元信息设置、删除确认）**必须使用原生 `<dialog closedby="any" aria-labelledby="...">`** 并通过 `ref.current?.showModal()` / `close()` 控制；**禁止**手写 `<div class="modal-backdrop">` 遮罩或重复添加 `role="dialog"` / `aria-modal`，保留 Safari `pointerdown` + `pointerup` 矩形边界检测回退。
-- 保持滚动包含样式：`dialog:modal { overscroll-behavior: contain; }` 与 `dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }`，严禁使用 `body { overflow: hidden }`。
-- 错误横幅使用 `role="alert"`，Toast 状态通知使用 `role="status"` / `aria-live="polite"`。
-
-### 4.2 表单语义、校验与输入体验
-- **所有 `<input>`、`<textarea>`、`<select>` 必须关联显式的 `<label htmlFor="id">` 并声明 `name` 属性**（包括 AI 改图输入框、节点属性抽屉中的每一项、打回目标下拉框与审批 `feedback` 文本框），严禁仅依赖 `placeholder` 充当标签。
-- 搜索区域保持 `<search>` 地标 + `type="search"`；存放路径、命令、ID 或二进制名的输入框（如 `cwd`、`command`、`binary`、`id`、`repo`）必须设置 `autoCorrect="off" autoCapitalize="off" spellCheck={false}`。
-- 严禁通过禁用提交按钮来阻止必填项校验（仅在请求进行中 `submitting` 时禁用防重）；`<textarea>` 允许 `resize: vertical`（禁止 `resize: none`）。
-
-### 4.3 排版、无障碍与现代 CSS
-- 保留 `<meta name="text-scale" content="scale" />`，**严禁使用 `px` 定义 `font-size`**（统一使用 `rem`），`line-height` 使用无单位数值，表单控件字号不小于 `1rem`。
-- 所有纯图标按钮必须具备明确的 `aria-label`，内部图标 `<svg>` 设置 `aria-hidden="true"`；可滚动日志终端与代码块 `<pre>` 设置 `tabIndex={0}` 并包裹 `<code>`。
-- Tab 切换组件严格配套 `role="tablist"` / `role="tab"` / `role="tabpanel"`、`aria-controls`、`aria-labelledby` 及左右方向键导航。
-- 严禁全局 `*` 重置；按钮 `:hover` 统一写成 `:hover:not(:disabled)`；动效遵守 `@media (prefers-reduced-motion: reduce)`；动态颜色通过 CSS 自定义属性（Design Tokens）传递。
+1. **原生浮层与模态框**：
+   - 所有弹窗（`CreateWorkflowDialog`、`NodeEditorDialog`、`EdgeEditorDialog`、`RunNodeWorkbenchDialog`、`NewRunDialog`、`WorkflowSettingsDialog`、`AgentManagerDialog`、`ConfirmDialog`）**必须全部使用原生 `<dialog closedby="any" aria-labelledby="...">`**（复用 `NativeDialog` 封装），通过 `showModal()` / `close()` 控制，保留 Safari `pointerdown` + `pointerup` 外部点击关闭回退；保持 `dialog:modal { overscroll-behavior: contain; }`，严禁手写遮罩 `<div>` 或 `body { overflow: hidden }`。
+   - 注意：当在 `NodeEditorDialog` 内嵌套使用「删除确认」或直接删除节点时，妥善处理双层 `<dialog>` 或弹窗内二次确认按钮，避免焦点冲突。
+2. **表单语义、校验与输入体验**：
+   - 所有 `<input>`、`<textarea>`、`<select>` 必须关联显式的 `<label htmlFor="id">` 并声明 `name` 属性，严禁仅依赖 `placeholder` 充当标签。
+   - 存放路径、命令、ID 或二进制名的输入框（如 `cwd`、`command`、`binary`、`id`、`new_node_id`、`repo`）必须设置 `autoCorrect="off" autoCapitalize="off" spellCheck={false}`。
+   - 严禁通过禁用提交按钮阻止必填校验（仅在请求提交中 `submitting` 时禁用防重）；`<textarea>` 保持 `resize: vertical`（禁止 `resize: none`）。
+3. **排版、无障碍与现代 CSS**：
+   - 保留 `<meta name="text-scale" content="scale" />`，**严禁使用 `px` 定义 `font-size`**（统一使用 `rem`），`line-height` 使用无单位数值，表单控件字号不小于 `1rem`。
+   - 所有纯图标按钮（包括「最大化 / 还原」、关闭、节点卡片内嵌编辑按钮）必须具备明确的 `aria-label`，内部图标 `<svg>` 设置 `aria-hidden="true"`；可滚动日志终端与代码块 `<pre>` 设置 `tabIndex={0}` 并包裹 `<code>`。
+   - Tab 切换组件严格配套 `role="tablist"` / `role="tab"` / `role="tabpanel"`、`aria-controls`、`aria-labelledby` 及左右方向键导航。
+   - 严禁全局 `*` 重置；按钮 `:hover` 统一写成 `:hover:not(:disabled)`；动效遵守 `@media (prefers-reduced-motion: reduce)`。

@@ -474,6 +474,114 @@ async def test_6_mcp_server_stdio() -> None:
             print(f"[ok] 6/6 官方 MCP Server v2 stdio 握手与 10 项工具校验通过")
 
 
+def test_7_quick_create_rename_and_condition_edge_polish(client: TestClient) -> None:
+    # 1) 纯中文名称一键新建空白工作流（无需填英文 ID，立即落盘并出现在工作流列表中）
+    r_blank = client.post(
+        "/api/workflows/create",
+        json={"name": "全新空白协同研发流", "mode": "blank"},
+    )
+    assert r_blank.status_code == 200, r_blank.text
+    blank_wf = r_blank.json()
+    assert blank_wf["id"] == "workflow-1"
+    assert blank_wf["name"] == "全新空白协同研发流"
+    assert blank_wf["updated_at"] is not None
+
+    # 再次纯中文新建自动递增为 workflow-2，绝不覆盖 workflow-1
+    r_blank2 = client.post(
+        "/api/workflows/create",
+        json={"name": "第二张空白工作流", "mode": "blank"},
+    )
+    assert r_blank2.status_code == 200, r_blank2.text
+    assert r_blank2.json()["id"] == "workflow-2"
+
+    # 2) 基于现有模板克隆新建，并测试显式重复 ID 返回 409 Conflict
+    r_tpl = client.post(
+        "/api/workflows/create",
+        json={
+            "name": "并行工作流定制版",
+            "id": "my-parallel-v2",
+            "mode": "template",
+            "template_id": "multi-agent-parallel",
+        },
+    )
+    assert r_tpl.status_code == 200, r_tpl.text
+    assert r_tpl.json()["id"] == "my-parallel-v2"
+    assert r_tpl.json()["name"] == "并行工作流定制版"
+
+    r_dup = client.post(
+        "/api/workflows/create",
+        json={"name": "冲突测试", "id": "my-parallel-v2", "mode": "blank"},
+    )
+    assert r_dup.status_code == 409, r_dup.text
+
+    # 3) 一句话 AI 新建模式（保留用户指定的中文名称并自动分配唯一 ID 落盘）
+    r_ai_new = client.post(
+        "/api/workflows/create",
+        json={
+            "name": "AI 一句话新建扫描流",
+            "mode": "ai",
+            "ai_instruction": "创建一个先运行扫描脚本、再人工确认的工作流",
+            "agent_id": "copilot-cli-test",
+        },
+    )
+    assert r_ai_new.status_code == 200, r_ai_new.text
+    ai_wf = r_ai_new.json()
+    assert ai_wf["name"] == "AI 一句话新建扫描流"
+    assert ai_wf["id"] in {w["id"] for w in client.get("/api/workflows").json()["workflows"]}
+
+    # 4) 节点 ID 重命名全图联动（entry_point、edges、review_nodes、rewind_targets 与 {node_id.xxx} 模板）
+    target_wf = client.get("/api/workflows/custom-parallel-flow").json()
+    r_ren = client.post(
+        "/api/workflows/rename-node",
+        json={
+            "workflow": target_wf,
+            "old_node_id": "arch",
+            "new_node_id": "design_spec",
+        },
+    )
+    assert r_ren.status_code == 200, r_ren.text
+    renamed = r_ren.json()
+    assert renamed["entry_point"] == "design_spec"
+    node_by_id = {n["id"]: n for n in renamed["nodes"]}
+    assert "design_spec" in node_by_id and "arch" not in node_by_id
+    assert "{design_spec.output}" in node_by_id["back_dev"]["prompt_template"]
+    assert "{design_spec.output}" in node_by_id["front_dev"]["prompt_template"]
+    assert node_by_id["arch_gate"]["review_nodes"] == ["design_spec"]
+    assert "design_spec" in node_by_id["final_gate"]["rewind_targets"]
+
+    # 5) 兜底边携带空 condition 残留时仍优先按 is_default 路由
+    stale_cond_wf = {
+        "id": "stale-cond-edge-flow",
+        "name": "空条件残留兜底路由测试",
+        "entry_point": "step_a",
+        "nodes": [
+            {"id": "step_a", "label": "步骤A", "kind": "shell", "command": "echo 'A'"},
+            {"id": "cond_a", "label": "判断", "kind": "condition"},
+            {"id": "fallback_ok", "label": "兜底目标", "kind": "shell", "command": "echo 'HIT_DEFAULT'"},
+        ],
+        "edges": [
+            {"source": "step_a", "target": "cond_a", "condition": {"field": "", "op": "==", "value": ""}},
+            {
+                "source": "cond_a",
+                "target": "END",
+                "condition": {"field": "step_a.output", "op": "==", "value": "NEVER_MATCH"},
+            },
+            {
+                "source": "cond_a",
+                "target": "fallback_ok",
+                "is_default": True,
+                "condition": {"field": "", "op": "==", "value": ""},
+            },
+            {"source": "fallback_ok", "target": "END"},
+        ],
+    }
+    assert client.post("/api/workflows", json=stale_cond_wf).status_code == 200
+    tid = client.post("/api/runs", json={"workflow_id": "stale-cond-edge-flow", "task": "check"}).json()["thread_id"]
+    st = _wait_for_status(client, tid, {"done"})
+    assert st["values"]["nodes"]["fallback_ok"]["ok"] is True
+    print("[ok] 7/7 一键新建工作流（空白/模板/AI）、节点 ID 全图联动重命名与条件边容错验证通过")
+
+
 def main() -> None:
     client = TestClient(app)
     agent_id = test_1_agents_and_security(client)
@@ -482,6 +590,7 @@ def main() -> None:
     test_4_streaming_logs_cancel_and_inplace_retry(client)
     test_5_natural_language_copilot_and_delete(client)
     asyncio.run(test_6_mcp_server_stdio())
+    test_7_quick_create_rename_and_condition_edge_polish(client)
 
 
 if __name__ == "__main__":

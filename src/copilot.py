@@ -17,7 +17,13 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from src.agents.registry import AgentRegistry
-from src.registry import NodePosition, WorkflowRegistry, WorkflowSpec, build_state_graph
+from src.registry import (
+    NodePosition,
+    WorkflowRegistry,
+    WorkflowSpec,
+    build_state_graph,
+    generate_unique_workflow_id,
+)
 
 
 class CopilotRequest(BaseModel):
@@ -37,6 +43,18 @@ class CopilotRequest(BaseModel):
     auto_save: bool = Field(
         False,
         description="生成并校验通过后是否立即落盘保存（默认 false，先返回给前端画布预览，用户确认后点保存）",
+    )
+    preferred_id: Optional[str] = Field(
+        None,
+        description="新建工作流时可选指定的目标 workflow_id（留空则自动生成唯一合法 ID）",
+    )
+    preferred_name: Optional[str] = Field(
+        None,
+        description="新建工作流时可选指定的显示名称（如『前后端并行评审流』）",
+    )
+    preferred_description: Optional[str] = Field(
+        None,
+        description="新建工作流时可选指定的描述文本",
     )
 
 
@@ -228,6 +246,37 @@ def generate_or_modify_workflow(
     summary = str(parsed.get("summary") or f"已按指令更新工作流：{req.instruction[:50]}")
 
     spec = WorkflowSpec.model_validate(wf_raw)
+    if req.current_workflow is None:
+        # 新建工作流模式：应用用户填写的名称/描述，并确保 ID 全局唯一不覆盖已有工作流
+        chosen_name = (req.preferred_name or "").strip() or spec.name
+        chosen_desc = (
+            req.preferred_description.strip()
+            if req.preferred_description is not None and req.preferred_description.strip()
+            else spec.description
+        )
+        existing = workflow_registry.existing_ids()
+        if req.preferred_id and req.preferred_id.strip():
+            chosen_id = generate_unique_workflow_id(
+                chosen_name,
+                existing,
+                preferred_id=req.preferred_id,
+            )
+        elif spec.id and spec.id not in existing:
+            chosen_id = spec.id
+        else:
+            chosen_id = generate_unique_workflow_id(chosen_name, existing)
+        spec = spec.model_copy(
+            update={
+                "id": chosen_id,
+                "name": chosen_name,
+                "description": chosen_desc,
+                "builtin": False,
+            }
+        )
+    else:
+        # 修改现有画布工作流：强制保持原工作流 ID 不变，防止 AI 擅自改 ID 导致保存成另一份
+        spec = spec.model_copy(update={"id": req.current_workflow.id})
+
     spec = _auto_layout_missing_positions(spec)
     # 试编译 LangGraph，确保生成的状态机 100% 合法可运行
     build_state_graph(spec).compile()

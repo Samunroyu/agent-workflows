@@ -786,6 +786,10 @@ def eval_condition(cond: EdgeCondition | RouteRule, state: dict[str, Any]) -> bo
 
 
 # ---------------------------------------------------------------- 拓扑分析（上游祖先推导 + 并行汇聚自动识别）
+def _has_nonempty_condition(edge: EdgeSpec) -> bool:
+    return edge.condition is not None and bool(edge.condition.field.strip())
+
+
 def _normalized_outgoing_rules(
     node: NodeSpec,
     out_edges: list[EdgeSpec],
@@ -800,28 +804,28 @@ def _normalized_outgoing_rules(
         if edge.conditions:
             return True, list(edge.conditions), edge.default_target or "END", []
 
-    # 2) v2 单边条件或起始节点本身就是 condition 节点
-    has_cond_edge = any(e.condition is not None or e.is_default for e in out_edges)
+    # 2) v2 单边条件或起始节点本身就是 condition 节点（忽略非 condition 节点上未填 field 的空条件残留）
+    has_cond_edge = any(_has_nonempty_condition(e) or e.is_default for e in out_edges)
     if node.kind == "condition" or has_cond_edge:
         rules: list[RouteRule] = []
         default_target: Optional[str] = None
         plain_fallbacks: list[str] = []
         for edge in out_edges:
             tgt = edge.target or "END"
-            if edge.condition is not None:
+            if edge.is_default:
+                if default_target is None:
+                    default_target = tgt
+            elif _has_nonempty_condition(edge) and edge.condition is not None:
                 rules.append(
                     RouteRule(
-                        field=edge.condition.field,
+                        field=edge.condition.field.strip(),
                         op=edge.condition.op,
                         value=edge.condition.value,
-                        value_ref=edge.condition.value_ref,
+                        value_ref=edge.condition.value_ref.strip() if edge.condition.value_ref else None,
                         target=tgt,
                         label=edge.label,
                     )
                 )
-            elif edge.is_default:
-                if default_target is None:
-                    default_target = tgt
             else:
                 plain_fallbacks.append(tgt)
         if default_target is None:
@@ -1050,9 +1054,14 @@ def _resolve_node_cwd(node: NodeSpec, state: dict[str, Any], default_repo: str) 
     return os.path.abspath(os.path.join(base_abs, expanded))
 
 
+_RESERVED_NODE_IDS = ("START", "END", "__start__", "__end__", "inputs", "nodes", "task", "repo", "feedback")
+_VALID_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
 def validate_workflow_spec(spec: WorkflowSpec) -> None:
     """严格校验 WorkflowSpec 的节点 ID、入口与所有连线引用合法性。"""
-    node_ids = {n.id for n in spec.nodes}
+    node_map = {n.id: n for n in spec.nodes}
+    node_ids = set(node_map.keys())
     if len(node_ids) != len(spec.nodes):
         raise ValueError("工作流包含重复的节点 ID")
     for reserved in ("START", "END", "__start__", "__end__", "inputs", "nodes"):
@@ -1062,6 +1071,7 @@ def validate_workflow_spec(spec: WorkflowSpec) -> None:
         raise ValueError(f"入口节点 entry_point '{spec.entry_point}' 不在节点列表中: {sorted(node_ids)}")
 
     valid_targets = node_ids | {"END"}
+    cond_unconfigured_by_src: dict[str, list[str]] = {}
     for edge in spec.edges:
         if edge.source not in node_ids:
             raise ValueError(f"连线起始节点 '{edge.source}' 不存在")
@@ -1074,6 +1084,220 @@ def validate_workflow_spec(spec: WorkflowSpec) -> None:
         else:
             if not edge.target or edge.target not in valid_targets:
                 raise ValueError(f"连线 '{edge.source} -> {edge.target}' 的目标节点无效")
+            src_node = node_map[edge.source]
+            if src_node.kind == "condition" and not edge.is_default and not _has_nonempty_condition(edge):
+                cond_unconfigured_by_src.setdefault(src_node.id, []).append(edge.target)
+
+    # 条件判断节点允许最多 1 条未填条件的出边自动充当隐式兜底（else），若 >=2 条均未配置条件也未勾选兜底则明确提示
+    for src_id, unconf_targets in cond_unconfigured_by_src.items():
+        has_explicit_default = any(
+            e.source == src_id and e.is_default for e in spec.edges
+        )
+        if has_explicit_default or len(unconf_targets) >= 2:
+            src_label = node_map[src_id].label
+            raise ValueError(
+                f"条件节点「{src_label}」连向「{unconf_targets[0]}」的分支尚未选择判断字段，请双击该连线配置条件或勾选为兜底分支"
+            )
+
+
+def generate_unique_workflow_id(
+    name: str,
+    existing_ids: set[str],
+    preferred_id: Optional[str] = None,
+) -> str:
+    """根据工作流名称（支持纯中文）自动生成唯一合法的 workflow_id，或校验用户指定的 preferred_id。"""
+    if preferred_id is not None and preferred_id.strip():
+        candidate = preferred_id.strip()
+        if not _VALID_ID_RE.match(candidate):
+            raise ValueError("工作流 ID 仅允许包含字母、数字、连字符 (-) 或下划线 (_)")
+        if candidate in existing_ids:
+            raise FileExistsError(f"工作流 ID '{candidate}' 已存在，请更换其它 ID 或留空自动生成")
+        return candidate
+
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", (name or "").strip()).strip("-").lower()
+    if slug:
+        base = slug[:36].strip("-") or "workflow"
+        if not base[0].isalpha():
+            base = f"wf-{base}"
+        if base not in existing_ids:
+            return base
+        idx = 2
+        while f"{base}-{idx}" in existing_ids:
+            idx += 1
+        return f"{base}-{idx}"
+
+    idx = 1
+    while f"workflow-{idx}" in existing_ids:
+        idx += 1
+    return f"workflow-{idx}"
+
+
+def build_blank_workflow_spec(
+    workflow_id: str,
+    name: str,
+    description: str = "",
+) -> WorkflowSpec:
+    """创建一张干净、立即可保存可运行的空白自定义工作流（含 1 个起始 Agent 节点连向 END）。"""
+    clean_name = (name or "").strip() or "自定义工作流"
+    clean_desc = (description or "").strip() or "自定义多 Agent 研发协同工作流"
+    return WorkflowSpec(
+        id=workflow_id,
+        name=clean_name,
+        description=clean_desc,
+        builtin=False,
+        inputs=default_workflow_inputs(),
+        entry_point="step_1",
+        nodes=[
+            NodeSpec(
+                id="step_1",
+                label="任务执行",
+                kind="agent",
+                description="默认起始节点，双击可在弹窗中放大编辑 Prompt、切换 CLI Agent 或继续增删下游节点",
+                agent_id="auto",
+                sandbox="workspace-write",
+                capture_git_diff=True,
+                prompt_template="请围绕以下任务完成分析与实现：\n\n{task}",
+                position=NodePosition(x=120, y=160),
+            )
+        ],
+        edges=[
+            EdgeSpec(id="e-step_1-END", source="step_1", target="END", label="完成"),
+        ],
+    )
+
+
+def clone_workflow_spec(
+    source: WorkflowSpec,
+    workflow_id: str,
+    name: str,
+    description: Optional[str] = None,
+) -> WorkflowSpec:
+    """基于现有工作流模板克隆一份全新的独立自定义工作流。"""
+    cloned = WorkflowSpec.model_validate(source.model_dump(mode="json"))
+    clean_name = (name or "").strip() or f"{source.name} 副本"
+    clean_desc = (
+        description.strip()
+        if description is not None and description.strip()
+        else source.description
+    )
+    return cloned.model_copy(
+        update={
+            "id": workflow_id,
+            "name": clean_name,
+            "description": clean_desc,
+            "builtin": False,
+            "updated_at": None,
+        }
+    )
+
+
+def rename_workflow_node(
+    spec: WorkflowSpec,
+    old_node_id: str,
+    new_node_id: str,
+) -> WorkflowSpec:
+    """重命名节点 ID 并全自动联动更新入口、连线、审批审阅/打回列表、条件表达式与所有 {node_id.xxx} 模板引用。"""
+    old_id = (old_node_id or "").strip()
+    new_id = (new_node_id or "").strip()
+    if not old_id or not new_id:
+        raise ValueError("原节点 ID 与新节点 ID 均不能为空")
+    if old_id == new_id:
+        return spec
+
+    existing_ids = {n.id for n in spec.nodes}
+    if old_id not in existing_ids:
+        raise KeyError(f"未找到要重命名的节点: {old_id}")
+    if not _VALID_ID_RE.match(new_id):
+        raise ValueError("新节点 ID 仅允许包含字母、数字、连字符 (-) 或下划线 (_)")
+    if new_id in _RESERVED_NODE_IDS:
+        raise ValueError(f"新节点 ID 不能使用保留字: {new_id}")
+    if new_id in existing_ids:
+        raise ValueError(f"节点 ID '{new_id}' 已存在，请换一个唯一 ID")
+
+    tpl_re = re.compile(r"\{\s*" + re.escape(old_id) + r"(\.[a-zA-Z0-9_]+)?\s*\}")
+
+    def _rewrite_tpl(val: Optional[str]) -> Optional[str]:
+        if not val:
+            return val
+        return tpl_re.sub(lambda m: "{" + new_id + (m.group(1) or "") + "}", val)
+
+    def _rewrite_path(path: Optional[str]) -> Optional[str]:
+        if not path:
+            return path
+        stripped = path.strip()
+        if stripped == old_id:
+            return new_id
+        if stripped.startswith(f"{old_id}."):
+            return f"{new_id}.{stripped[len(old_id) + 1:]}"
+        return path
+
+    updated_nodes: list[NodeSpec] = []
+    for n in spec.nodes:
+        updated_nodes.append(
+            n.model_copy(
+                update={
+                    "id": new_id if n.id == old_id else n.id,
+                    "prompt_template": _rewrite_tpl(n.prompt_template),
+                    "command": _rewrite_tpl(n.command),
+                    "instruction": _rewrite_tpl(n.instruction),
+                    "cwd": _rewrite_tpl(n.cwd),
+                    "result_template": _rewrite_tpl(n.result_template),
+                    "abort_result_template": _rewrite_tpl(n.abort_result_template),
+                    "review_nodes": [new_id if x == old_id else x for x in n.review_nodes],
+                    "rewind_targets": [new_id if x == old_id else x for x in n.rewind_targets],
+                }
+            )
+        )
+
+    updated_edges: list[EdgeSpec] = []
+    for idx, e in enumerate(spec.edges):
+        new_src = new_id if e.source == old_id else e.source
+        new_tgt = new_id if e.target == old_id else e.target
+        new_def = new_id if e.default_target == old_id else e.default_target
+        new_cond = None
+        if e.condition is not None:
+            new_cond = e.condition.model_copy(
+                update={
+                    "field": _rewrite_path(e.condition.field) or "",
+                    "value_ref": _rewrite_path(e.condition.value_ref),
+                }
+            )
+        new_rules = [
+            r.model_copy(
+                update={
+                    "field": _rewrite_path(r.field) or "",
+                    "value_ref": _rewrite_path(r.value_ref),
+                    "target": new_id if r.target == old_id else r.target,
+                }
+            )
+            for r in e.conditions
+        ]
+        # 若原边 ID 包含自动生成的旧节点名前缀，一并平滑更新，防止产生令人困惑的陈旧 edge id
+        new_edge_id = e.id
+        if new_edge_id and old_id in new_edge_id:
+            new_edge_id = f"e-{new_src}-{new_tgt or new_def or 'cond'}-{idx}"
+        updated_edges.append(
+            e.model_copy(
+                update={
+                    "id": new_edge_id,
+                    "source": new_src,
+                    "target": new_tgt,
+                    "default_target": new_def,
+                    "condition": new_cond,
+                    "conditions": new_rules,
+                }
+            )
+        )
+
+    renamed = spec.model_copy(
+        update={
+            "entry_point": new_id if spec.entry_point == old_id else spec.entry_point,
+            "nodes": updated_nodes,
+            "edges": updated_edges,
+        }
+    )
+    validate_workflow_spec(renamed)
+    return renamed
 
 
 def build_state_graph(
@@ -1736,6 +1960,9 @@ class WorkflowRegistry:
                     break
         return None
 
+    def existing_ids(self) -> set[str]:
+        return {s.id for s in self.list_workflows()}
+
     def save_workflow(self, spec: WorkflowSpec) -> WorkflowSpec:
         """校验拓扑与 LangGraph 编译合法性后落盘保存（支持新建与原地更新节点/连线）。"""
         build_state_graph(spec).compile()
@@ -1747,6 +1974,34 @@ class WorkflowRegistry:
         )
         self._write_spec_file(updated)
         return updated
+
+    def create_blank_workflow(
+        self,
+        *,
+        name: str,
+        preferred_id: Optional[str] = None,
+        description: str = "",
+    ) -> WorkflowSpec:
+        """一键创建并落盘保存一张全新的空白自定义工作流。"""
+        wf_id = generate_unique_workflow_id(name, self.existing_ids(), preferred_id=preferred_id)
+        spec = build_blank_workflow_spec(wf_id, name=name, description=description)
+        return self.save_workflow(spec)
+
+    def create_from_template(
+        self,
+        *,
+        template_id: str,
+        name: str,
+        preferred_id: Optional[str] = None,
+        description: str = "",
+    ) -> WorkflowSpec:
+        """基于已有工作流模板一键克隆并落盘保存为全新的自定义工作流。"""
+        source = self.get_workflow(template_id)
+        if source is None:
+            raise KeyError(f"未找到源模板工作流: {template_id}")
+        wf_id = generate_unique_workflow_id(name, self.existing_ids(), preferred_id=preferred_id)
+        spec = clone_workflow_spec(source, wf_id, name=name, description=description)
+        return self.save_workflow(spec)
 
     def delete_workflow(self, workflow_id: str) -> bool:
         """删除任意指定工作流（不再锁定禁止删除）。"""
