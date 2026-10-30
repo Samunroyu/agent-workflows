@@ -148,6 +148,27 @@ export interface CopilotRequest {
   current_workflow?: WorkflowSpec | null
   agent_id?: string
   auto_save?: boolean
+  preferred_id?: string | null
+  preferred_name?: string | null
+  preferred_description?: string | null
+}
+
+export type CreateWorkflowMode = 'blank' | 'template' | 'ai'
+
+export interface CreateWorkflowRequest {
+  name: string
+  id?: string | null
+  description?: string
+  mode?: CreateWorkflowMode
+  template_id?: string | null
+  ai_instruction?: string | null
+  agent_id?: string
+}
+
+export interface RenameNodeRequest {
+  workflow: WorkflowSpec
+  old_node_id: string
+  new_node_id: string
 }
 
 export interface CopilotResponse {

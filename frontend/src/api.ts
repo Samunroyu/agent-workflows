@@ -1,7 +1,7 @@
 import type {
   AgentListOut, AgentProfileOut, AgentProfileSpec, CancelRunOut, CopilotRequest,
-  CopilotResponse, DebugThreadsOut, DeleteAgentOut, DeleteWorkflowOut, HealthOut,
-  ResumeIn, ResumeOut, RetryRunIn, RetryRunOut, RunIn, RunListOut, RunLogQuery,
+  CopilotResponse, CreateWorkflowRequest, DebugThreadsOut, DeleteAgentOut, DeleteWorkflowOut, HealthOut,
+  RenameNodeRequest, ResumeIn, ResumeOut, RetryRunIn, RetryRunOut, RunIn, RunListOut, RunLogQuery,
   RunLogsOut, RunStateOut, StartRunOut, ValidateWorkflowOut, WorkerListOut,
   WorkflowListOut, WorkflowSpec,
 } from './types'
@@ -64,6 +64,8 @@ export const api = {
   updateWorkflow: (workflowId: string, input: WorkflowSpec) => request<WorkflowSpec>(`/api/workflows/${segment(workflowId)}`, json('PUT', input)),
   deleteWorkflow: (workflowId: string) => request<DeleteWorkflowOut>(`/api/workflows/${segment(workflowId)}`, { method: 'DELETE' }),
   validateWorkflow: (input: WorkflowSpec) => request<ValidateWorkflowOut>('/api/workflows/validate', json('POST', input)),
+  createWorkflow: (input: CreateWorkflowRequest) => request<WorkflowSpec>('/api/workflows/create', json('POST', input)),
+  renameNode: (input: RenameNodeRequest) => request<WorkflowSpec>('/api/workflows/rename-node', json('POST', input)),
   workflowCopilot: (input: CopilotRequest) => request<CopilotResponse>('/api/workflows/copilot', json('POST', input)),
 
   runs: () => request<RunListOut>('/api/runs'),

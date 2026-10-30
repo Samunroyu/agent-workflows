@@ -5,12 +5,14 @@ import type {
   PointerEvent as ReactPointerEvent,
   ReactNode,
 } from 'react'
-import { ChevronDown, LoaderCircle, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ChevronDown, LoaderCircle, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import { api } from '../api'
 import type {
   AgentDriver,
   AgentProfileOut,
   AgentProfileSpec,
+  CreateWorkflowMode,
+  CreateWorkflowRequest,
   StartRunOut,
   WorkflowInputKind,
   WorkflowInputSpec,
@@ -359,18 +361,17 @@ function inputDefaultText(spec: WorkflowInputSpec): string {
 export function WorkflowSettingsDialog({
   open,
   workflow,
-  idReadOnly,
   onClose,
   onSave,
 }: {
   open: boolean
   workflow: WorkflowSpec | null
-  idReadOnly?: boolean
   onClose: () => void
-  onSave: (workflow: WorkflowSpec) => void
+  onSave: (workflow: WorkflowSpec) => Promise<void>
 }) {
   const [draft, setDraft] = useState<WorkflowSpec | null>(null)
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -382,7 +383,12 @@ export function WorkflowSettingsDialog({
       })),
     } : null)
     setError('')
+    setSubmitting(false)
   }, [open, workflow])
+
+  const requestClose = () => {
+    if (!submitting) onClose()
+  }
 
   const updateInput = (index: number, patch: Partial<WorkflowInputSpec>) => {
     setError('')
@@ -429,9 +435,9 @@ export function WorkflowSettingsDialog({
     } : current)
   }
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!draft) return
+    if (!draft || submitting) return
     const inputs = (draft.inputs ?? []).map((spec) => ({
       ...spec,
       key: spec.key.trim(),
@@ -454,19 +460,26 @@ export function WorkflowSettingsDialog({
       }
       seenKeys.add(spec.key)
     }
+    setSubmitting(true)
     setError('')
-    onSave({
-      ...draft,
-      id: draft.id.trim(),
-      name: draft.name.trim(),
-      description: draft.description?.trim() ?? '',
-      inputs,
-    })
-    onClose()
+    try {
+      await onSave({
+        ...draft,
+        id: draft.id.trim(),
+        name: draft.name.trim(),
+        description: draft.description?.trim() ?? '',
+        inputs,
+      })
+      onClose()
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
-    <NativeDialog open={open} onClose={onClose} labelledBy="workflow-settings-title" className="run-modal">
+    <NativeDialog open={open} onClose={requestClose} labelledBy="workflow-settings-title" className="run-modal" preventClose={submitting}>
       <div className="modal-heading">
         <div>
           <div>
@@ -474,28 +487,24 @@ export function WorkflowSettingsDialog({
             <h2 id="workflow-settings-title">工作流设置</h2>
           </div>
         </div>
-        <button type="button" className="icon-button" aria-label="关闭工作流设置" onClick={onClose}>
+        <button type="button" className="icon-button" aria-label="关闭工作流设置" onClick={requestClose} disabled={submitting}>
           <X size={18} aria-hidden="true" />
         </button>
       </div>
       {error && <div className="inline-error" role="alert">{error}</div>}
       {draft && (
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={(event) => void handleSubmit(event)}>
           <div style={fieldGridStyle}>
             <div className="form-field">
-              <label htmlFor="workflow-settings-id">工作流 ID<em>必填</em></label>
+              <label htmlFor="workflow-settings-id">工作流 ID</label>
               <input
                 id="workflow-settings-id"
                 name="workflow_id"
-                required
-                pattern={idPattern}
-                title="仅使用字母、数字、下划线和连字符"
                 autoCorrect="off"
                 autoCapitalize="off"
                 spellCheck={false}
-                readOnly={idReadOnly}
+                readOnly
                 value={draft.id}
-                onChange={(event) => setDraft({ ...draft, id: event.target.value })}
               />
             </div>
             <div className="form-field">
@@ -637,12 +646,244 @@ export function WorkflowSettingsDialog({
               <Plus size={14} aria-hidden="true" />新增字段
             </button>
           </fieldset>
+          {submitting && <span role="status" aria-live="polite">正在保存工作流设置到后端…</span>}
           <div className="modal-actions">
-            <button type="button" className="modal-cancel" onClick={onClose}>取消</button>
-            <button type="submit" className="modal-submit">保存设置</button>
+            <button type="button" className="modal-cancel" onClick={requestClose} disabled={submitting}>取消</button>
+            <button type="submit" className="modal-submit" disabled={submitting}>
+              {submitting && <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />}
+              {submitting ? '保存中…' : '保存设置'}
+            </button>
           </div>
         </form>
       )}
+    </NativeDialog>
+  )
+}
+
+const CREATE_MODES: Array<{ value: CreateWorkflowMode; label: string; hint: string }> = [
+  { value: 'blank', label: '空白画布', hint: '含 1 个默认起始节点，进去自由拖拽增删' },
+  { value: 'ai', label: '一句话 AI 生成', hint: '描述想要的流程，由本机 CLI Agent 自动构图' },
+  { value: 'template', label: '复制现有模板', hint: '从已有工作流克隆一份再改' },
+]
+
+export function CreateWorkflowDialog({
+  open,
+  workflows,
+  agents,
+  onClose,
+  onCreated,
+}: {
+  open: boolean
+  workflows: WorkflowSpec[]
+  agents: AgentProfileOut[]
+  onClose: () => void
+  onCreated: (workflow: WorkflowSpec) => void
+}) {
+  const [name, setName] = useState('')
+  const [mode, setMode] = useState<CreateWorkflowMode>('blank')
+  const [description, setDescription] = useState('')
+  const [customId, setCustomId] = useState('')
+  const [aiInstruction, setAiInstruction] = useState('')
+  const [agentId, setAgentId] = useState('auto')
+  const [templateId, setTemplateId] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setName('')
+    setMode('blank')
+    setDescription('')
+    setCustomId('')
+    setAiInstruction('')
+    setAgentId('auto')
+    setTemplateId(workflows[0]?.id ?? '')
+    setSubmitting(false)
+    setError('')
+  }, [open, workflows])
+
+  const requestClose = () => {
+    if (!submitting) onClose()
+  }
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (submitting) return
+    if (mode === 'ai' && aiInstruction.trim().length < 2) {
+      setError('请用至少 2 个字符描述要生成的流程')
+      return
+    }
+    if (mode === 'template' && !templateId) {
+      setError('请选择要复制的模板工作流')
+      return
+    }
+    setSubmitting(true)
+    setError('')
+    try {
+      const input: CreateWorkflowRequest = {
+        name: name.trim(),
+        id: customId.trim() || null,
+        description: description.trim(),
+        mode,
+        template_id: mode === 'template' ? templateId : null,
+        ai_instruction: mode === 'ai' ? aiInstruction.trim() : null,
+        agent_id: mode === 'ai' ? agentId : 'auto',
+      }
+      const created = await api.createWorkflow(input)
+      onCreated(created)
+      onClose()
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <NativeDialog
+      open={open}
+      onClose={requestClose}
+      labelledBy="create-workflow-title"
+      className="run-modal"
+      preventClose={submitting}
+    >
+      <div className="modal-heading">
+        <div>
+          <div>
+            <span className="eyebrow">NEW WORKFLOW</span>
+            <h2 id="create-workflow-title">新建工作流</h2>
+          </div>
+        </div>
+        <button type="button" className="icon-button" aria-label="关闭新建工作流弹窗" onClick={requestClose} disabled={submitting}>
+          <X size={18} aria-hidden="true" />
+        </button>
+      </div>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      <form onSubmit={(event) => void handleSubmit(event)}>
+        <div className="form-field">
+          <label htmlFor="create-workflow-name">工作流名称<em>必填</em></label>
+          <input
+            id="create-workflow-name"
+            name="name"
+            required
+            autoFocus
+            placeholder="如：前后端并行验收流"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </div>
+        <fieldset className="create-mode-fieldset">
+          <legend>创建起点</legend>
+          {CREATE_MODES.map((item) => (
+            <label key={item.value} className={`create-mode-option ${mode === item.value ? 'is-active' : ''}`}>
+              <input
+                type="radio"
+                name="mode"
+                value={item.value}
+                checked={mode === item.value}
+                onChange={() => setMode(item.value)}
+              />
+              <span>
+                <strong>{item.label}</strong>
+                <small>{item.hint}</small>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        {mode === 'ai' && (
+          <>
+            <div className="form-field">
+              <label htmlFor="create-workflow-ai-instruction">一句话描述流程<em>必填</em></label>
+              <textarea
+                id="create-workflow-ai-instruction"
+                name="ai_instruction"
+                required
+                minLength={2}
+                placeholder="如：先让 Codex 写方案并人工审批，通过后前后端并行开发再跑测试"
+                value={aiInstruction}
+                onChange={(event) => setAiInstruction(event.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="create-workflow-agent">构图 CLI Agent</label>
+              <div className="form-select">
+                <select
+                  id="create-workflow-agent"
+                  name="agent_id"
+                  value={agentId}
+                  onChange={(event) => setAgentId(event.target.value)}
+                >
+                  <option value="auto">auto · 自动选择在线 Agent</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name}（{agent.id}）{agent.available ? '' : ' · 未安装'}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} aria-hidden="true" />
+              </div>
+            </div>
+          </>
+        )}
+        {mode === 'template' && (
+          <div className="form-field">
+            <label htmlFor="create-workflow-template">选择要复制的模板<em>必填</em></label>
+            <div className="form-select">
+              <select
+                id="create-workflow-template"
+                name="template_id"
+                required
+                value={templateId}
+                onChange={(event) => setTemplateId(event.target.value)}
+              >
+                {workflows.length === 0 && <option value="">暂无可用模板</option>}
+                {workflows.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}（{item.id}）</option>
+                ))}
+              </select>
+              <ChevronDown size={15} aria-hidden="true" />
+            </div>
+          </div>
+        )}
+        <div className="form-field">
+          <label htmlFor="create-workflow-description">工作流描述（选填）</label>
+          <textarea
+            id="create-workflow-description"
+            name="description"
+            placeholder="这个工作流用来做什么？"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+          />
+        </div>
+        <details className="advanced-details">
+          <summary>高级：自定义工作流 ID（选填，留空自动生成）</summary>
+          <div className="form-field">
+            <label htmlFor="create-workflow-id">自定义工作流 ID</label>
+            <input
+              id="create-workflow-id"
+              name="id"
+              pattern={idPattern}
+              title="仅限字母、数字、连字符 - 或下划线 _"
+              placeholder="留空由后端自动生成唯一 ID"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={customId}
+              onChange={(event) => setCustomId(event.target.value)}
+            />
+          </div>
+        </details>
+        {submitting && <span role="status" aria-live="polite">正在创建并落盘保存工作流…</span>}
+        <div className="modal-actions">
+          <button type="button" className="modal-cancel" onClick={requestClose} disabled={submitting}>取消</button>
+          <button type="submit" className="modal-submit" disabled={submitting}>
+            {submitting
+              ? <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+              : mode === 'ai' ? <Sparkles size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}
+            {submitting ? '创建中…' : '立即创建'}
+          </button>
+        </div>
+      </form>
     </NativeDialog>
   )
 }

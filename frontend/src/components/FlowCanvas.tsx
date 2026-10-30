@@ -10,7 +10,7 @@ import {
   useReactFlow,
 } from '@xyflow/react'
 import type { Connection, Edge, Node } from '@xyflow/react'
-import { Bot, CircleCheck, GitBranch, ShieldCheck, Terminal } from 'lucide-react'
+import { Bot, CircleCheck, GitBranch, Pencil, ShieldCheck, Terminal } from 'lucide-react'
 import type {
   EdgeSpec,
   NodeExecutionOut,
@@ -21,6 +21,13 @@ import type {
 } from '../types'
 
 export type CanvasSelection = { type: 'node' | 'edge'; id: string } | null
+
+export type RuntimeTone = 'idle' | 'running' | 'waiting' | 'error' | 'cancelled' | 'done'
+
+export interface RuntimeDisplay {
+  label: string
+  tone: RuntimeTone
+}
 
 export interface FlowCanvasProps {
   workflow: WorkflowSpec
@@ -33,13 +40,9 @@ export interface FlowCanvasProps {
   onDeleteNode?: (nodeId: string) => void
   onDeleteEdge?: (edgeId: string) => void
   onDropNode?: (kind: NodeKind, position: { x: number; y: number }) => void
-}
-
-type RuntimeTone = 'idle' | 'running' | 'waiting' | 'error' | 'cancelled' | 'done'
-
-interface RuntimeDisplay {
-  label: string
-  tone: RuntimeTone
+  onOpenNode?: (nodeId: string) => void
+  onOpenEdge?: (edgeId: string) => void
+  nodeActionLabel?: (node: NodeSpec, runtime: RuntimeDisplay | null) => string | null
 }
 
 const NODE_MIME = 'application/x-workflow-node'
@@ -195,6 +198,9 @@ function FlowCanvasInner({
   onDeleteNode,
   onDeleteEdge,
   onDropNode,
+  onOpenNode,
+  onOpenEdge,
+  nodeActionLabel,
 }: FlowCanvasProps) {
   const isEdit = mode === 'edit'
   const { fitView, screenToFlowPosition } = useReactFlow()
@@ -258,22 +264,8 @@ function FlowCanvasInner({
       const running = runtime?.tone === 'running'
       const execution = run?.values?.nodes?.[node.id]
       const entry = node.id === workflow.entry_point
-      const outgoing = workflowEdges.find((edge) => edge.source === node.id)
-      const primaryTargetId = outgoing?.target ?? outgoing?.conditions?.[0]?.target ?? outgoing?.default_target
-      const primaryTarget = primaryTargetId ? positions.get(primaryTargetId) : undefined
-      const incoming = workflowEdges.find((edge) => (
-        edge.target === node.id
-        || edge.default_target === node.id
-        || edge.conditions?.some((rule) => rule.target === node.id)
-      ))
-      const primarySource = incoming ? positions.get(incoming.source) : undefined
-      const sourcePosition = primaryTarget && primaryTarget.y > position.y
-        ? Position.Bottom
-        : primaryTarget && primaryTarget.x < position.x ? Position.Left : Position.Right
-      const targetPosition = primarySource && primarySource.y < position.y
-        ? Position.Top
-        : primarySource && primarySource.x > position.x ? Position.Right : Position.Left
       const isSelected = selected?.type === 'node' && selected.id === node.id
+      const actionLabel = !virtual && onOpenNode ? nodeActionLabel?.(node, runtime) ?? null : null
       const style: CSSProperties = {
         width: 196,
         borderRadius: 16,
@@ -300,8 +292,8 @@ function FlowCanvasInner({
         initialWidth: 196,
         initialHeight: 100,
         measured: measuredNodes.current.get(node.id),
-        sourcePosition,
-        targetPosition,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         className: stateClasses,
         selected: isSelected,
         selectable: true,
@@ -318,6 +310,19 @@ function FlowCanvasInner({
                 </span>
                 <span className="flow-node-title">{node.label}</span>
                 {entry && <span className="flow-node-entry-badge">入口 START</span>}
+                {actionLabel && (
+                  <button
+                    type="button"
+                    className="flow-node-action nodrag"
+                    aria-label={`${actionLabel}节点 ${node.label}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onOpenNode?.(node.id)
+                    }}
+                  >
+                    <Pencil size={11} aria-hidden="true" />{actionLabel}
+                  </button>
+                )}
               </div>
               <p className="flow-node-description">{node.description || kindDescriptions[node.kind]}</p>
               <div className="flow-node-meta">
@@ -339,7 +344,7 @@ function FlowCanvasInner({
         },
       }
     })
-  }, [isEdit, run, selected, workflow.entry_point, workflow.nodes, workflowEdges])
+  }, [isEdit, nodeActionLabel, onOpenNode, run, selected, workflow.entry_point, workflow.nodes, workflowEdges])
 
   const edges = useMemo<Edge[]>(() => expandedEdges(workflow, isEdit).map((edge) => ({
     ...edge,
@@ -391,8 +396,7 @@ function FlowCanvasInner({
         nodesConnectable={isEdit}
         elementsSelectable
         deleteKeyCode={isEdit ? ['Backspace', 'Delete'] : null}
-        zoomOnScroll={false}
-        preventScrolling={false}
+        zoomOnScroll={true}
         onNodesChange={(changes) => {
           changes.forEach((change) => {
             if (change.type === 'dimensions' && change.dimensions) {
@@ -401,8 +405,15 @@ function FlowCanvasInner({
           })
         }}
         onNodeClick={(_, node) => onSelect?.({ type: 'node', id: node.id })}
+        onNodeDoubleClick={(_, node) => {
+          if (node.id === 'START' || node.id === 'END') return
+          onOpenNode?.(node.id)
+        }}
         onEdgeClick={(_, edge) => {
           if (isEdit) onSelect?.({ type: 'edge', id: edge.id })
+        }}
+        onEdgeDoubleClick={(_, edge) => {
+          if (isEdit) onOpenEdge?.(edge.id)
         }}
         onPaneClick={() => onSelect?.(null)}
         onNodeDragStop={(_, node) => {
@@ -427,11 +438,12 @@ function FlowCanvasInner({
       </ReactFlow>
       <div className="flow-legend" aria-label="画布操作提示">
         {isEdit ? <>
-          <span>拖拽节点调整位置</span>
-          <span>拖线连接 · Delete / Backspace 删除</span>
+          <span>拖拽移动 · 滚轮缩放</span>
+          <span>双击节点 / 连线打开编辑工作台 · Delete 删除</span>
         </> : <>
           <span><i className="legend-dot legend-dot--done" aria-hidden="true" />已执行</span>
           <span><i className="legend-dot legend-dot--active" aria-hidden="true" />执行中</span>
+          <span>双击节点打开运行工作台</span>
         </>}
       </div>
     </div>

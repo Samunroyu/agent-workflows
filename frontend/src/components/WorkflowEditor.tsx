@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent as ReactDragEvent, FormEvent } from 'react'
 import {
-  Bot, Check, Copy, GitBranch, LoaderCircle, Play, Plus, Save, Settings2,
+  Bot, Check, GitBranch, LoaderCircle, Play, Plus, Save, Settings2,
   ShieldCheck, Sparkles, Terminal, Trash2, Undo2, Workflow,
 } from 'lucide-react'
 import { api } from '../api'
@@ -11,8 +11,9 @@ import type {
 } from '../types'
 import FlowCanvas from './FlowCanvas'
 import type { CanvasSelection } from './FlowCanvas'
-import WorkflowInspector from './WorkflowInspector'
-import { ConfirmDialog, WorkflowSettingsDialog } from './Dialogs'
+import NodeEditorDialog from './NodeEditorDialog'
+import EdgeEditorDialog from './EdgeEditorDialog'
+import { ConfirmDialog, CreateWorkflowDialog, WorkflowSettingsDialog } from './Dialogs'
 
 interface WorkflowEditorProps {
   workflows: WorkflowSpec[]
@@ -94,21 +95,6 @@ function newNode(kind: NodeKind, sequence: number, position = { x: 120, y: 120 }
   }
 }
 
-function createWorkflow(workflows: WorkflowSpec[]): WorkflowSpec {
-  let id = `workflow_${Date.now().toString(36)}`
-  while (workflows.some((item) => item.id === id)) id = `${id}_copy`
-  return {
-    id,
-    name: '未命名工作流',
-    description: '通过可视化画布编排 Agent、Shell 与人工审批。',
-    builtin: false,
-    inputs: [{ key: 'task', label: '任务描述', kind: 'textarea', required: true, default: '', placeholder: '描述这次要完成的任务' }],
-    entry_point: 'agent_1',
-    nodes: [{ ...newNode('agent', 1, { x: 80, y: 100 }), label: '任务执行', description: '根据任务描述执行开发或分析' }],
-    edges: [{ id: edgeId(), source: 'agent_1', target: 'END', label: '完成' }],
-  }
-}
-
 function toolIcon(kind: NodeKind) {
   if (kind === 'shell') return <Terminal size={14} aria-hidden="true" />
   if (kind === 'gate') return <ShieldCheck size={14} aria-hidden="true" />
@@ -136,7 +122,10 @@ export default function WorkflowEditor({
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [nodeDialogId, setNodeDialogId] = useState<string | null>(null)
+  const [edgeDialogId, setEdgeDialogId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [instruction, setInstruction] = useState('')
   const [copilotAgent, setCopilotAgent] = useState('auto')
@@ -152,6 +141,8 @@ export default function WorkflowEditor({
     setDraft(next)
     setBaseline(next ? JSON.stringify(next) : '')
     setSelection(null)
+    setNodeDialogId(null)
+    setEdgeDialogId(null)
     setValidation(null)
     setUpstreamMap({})
     setAiUndo(null)
@@ -187,32 +178,6 @@ export default function WorkflowEditor({
     setDraft((current) => current ? updater(current) : current)
     setError('')
   }, [])
-
-  const createNew = () => {
-    const next = createWorkflow(workflows)
-    setDraft(next)
-    setBaseline('')
-    setSelection({ type: 'node', id: next.entry_point })
-    setAiUndo(null)
-    setSettingsOpen(true)
-  }
-
-  const copyCurrent = () => {
-    if (!draft) return
-    const next = clone(draft)
-    const baseId = `${draft.id}_copy`
-    next.id = baseId
-    let suffix = 2
-    while (workflows.some((item) => item.id === next.id)) next.id = `${baseId}_${suffix++}`
-    next.name = `${draft.name} 副本`
-    next.builtin = false
-    next.updated_at = null
-    setDraft(next)
-    setBaseline('')
-    setSelection(null)
-    setAiUndo(null)
-    onToast('已复制为未保存草稿，请确认后保存')
-  }
 
   const addNode = (kind: NodeKind, position?: { x: number; y: number }) => {
     if (!['agent', 'shell', 'gate', 'condition'].includes(kind)) return
@@ -255,7 +220,7 @@ export default function WorkflowEditor({
         source,
         target,
         label: sourceNode?.kind === 'condition' ? '条件分支' : '',
-        condition: sourceNode?.kind === 'condition' ? { field: '', op: '==', value: '' } : null,
+        condition: null,
         is_default: false,
       }
       setSelection({ type: 'edge', id: next.id! })
@@ -285,7 +250,6 @@ export default function WorkflowEditor({
     if (!draft || saving || copilotPending) return
     const submitted = draft
     const submittedJson = JSON.stringify(submitted)
-    const persisted = baseline !== ''
     setSaving(true)
     setError('')
     try {
@@ -293,7 +257,7 @@ export default function WorkflowEditor({
       setValidation(check)
       setUpstreamMap(check.upstream_map ?? {})
       if (!check.valid) throw new Error(check.error || '工作流拓扑校验未通过')
-      const saved = persisted ? await api.updateWorkflow(submitted.id, submitted) : await api.saveWorkflow(submitted)
+      const saved = await api.updateWorkflow(submitted.id, submitted)
       const normalized = normalizeWorkflow(saved)
       setDraft((current) => current && JSON.stringify(current) === submittedJson ? normalized : current)
       setBaseline(JSON.stringify(normalized))
@@ -307,19 +271,40 @@ export default function WorkflowEditor({
     }
   }
 
+  const saveSettings = async (incoming: WorkflowSpec) => {
+    const current = draftRef.current
+    if (!current) throw new Error('没有可保存的工作流')
+    const merged: WorkflowSpec = {
+      ...current,
+      name: incoming.name,
+      description: incoming.description,
+      inputs: incoming.inputs,
+    }
+    const check = await api.validateWorkflow(merged)
+    setValidation(check)
+    setUpstreamMap(check.upstream_map ?? {})
+    if (!check.valid) throw new Error(check.error || '工作流拓扑校验未通过')
+    const saved = await api.updateWorkflow(current.id, merged)
+    const normalized = normalizeWorkflow(saved)
+    setDraft(normalized)
+    setBaseline(JSON.stringify(normalized))
+    await onWorkflowsChanged()
+    onToast(`工作流「${saved.name}」设置已同步落盘保存`)
+  }
+
+  const renameNode = async (oldNodeId: string, newNodeId: string) => {
+    const current = draftRef.current
+    if (!current) throw new Error('没有正在编辑的工作流')
+    const renamed = await api.renameNode({ workflow: current, old_node_id: oldNodeId, new_node_id: newNodeId })
+    const normalized = normalizeWorkflow(renamed)
+    setDraft(normalized)
+    setSelection({ type: 'node', id: newNodeId })
+    setNodeDialogId(newNodeId)
+    onToast(`节点 ID 已联动更新为 ${newNodeId}，请记得保存画布落盘`)
+  }
+
   const remove = async () => {
     if (!draft || deleting) return
-    if (baseline === '') {
-      const fallback = workflows.find((item) => item.id !== draft.id) ?? null
-      setDeleteOpen(false)
-      if (fallback) onSelectWorkflow(fallback.id)
-      else {
-        setDraft(null)
-        setBaseline('')
-      }
-      onToast('已丢弃未保存草稿')
-      return
-    }
     setDeleting(true)
     setError('')
     try {
@@ -371,29 +356,46 @@ export default function WorkflowEditor({
     }
   }
 
+  const handleCreated = (created: WorkflowSpec) => {
+    requestLeave(() => {
+      void onWorkflowsChanged().then(() => onSelectWorkflow(created.id))
+      onToast(`工作流「${created.name}」已创建并落盘保存，立即可发起运行`)
+    })
+  }
+
   const stats = useMemo(() => ({ nodes: draft?.nodes.length ?? 0, edges: draft?.edges?.length ?? 0 }), [draft])
 
   if (!draft) {
-    return <section className="editor-empty"><Workflow size={28} aria-hidden="true" /><h2>从第一张工作流画布开始</h2><p>新建带默认入口节点的草稿，或使用 AI 生成后再保存。</p><button type="button" className="modal-submit" onClick={createNew}><Plus size={15} aria-hidden="true" />新建工作流</button></section>
+    return (
+      <section className="editor-empty">
+        <Workflow size={28} aria-hidden="true" />
+        <h2>从第一张工作流画布开始</h2>
+        <p>一步创建并落盘保存：空白画布、一句话 AI 生成，或复制现有模板。</p>
+        <button type="button" className="modal-submit" onClick={() => setCreateOpen(true)}>
+          <Plus size={15} aria-hidden="true" />新建工作流
+        </button>
+        <CreateWorkflowDialog open={createOpen} workflows={workflows} agents={agents} onClose={() => setCreateOpen(false)} onCreated={handleCreated} />
+      </section>
+    )
   }
 
-  return <>
+  return (
     <section className="b-canvas-card workflow-editor" id="workflow-panel">
       <div className="workflow-management-bar">
         <div className="workflow-switch-group">
           <Workflow size={18} aria-hidden="true" />
           <label htmlFor="workflow-switcher">工作流</label>
           <select id="workflow-switcher" name="workflow_id" value={draft.id} onChange={(event) => requestLeave(() => onSelectWorkflow(event.target.value))}>
-            {!workflows.some((item) => item.id === draft.id) && <option value={draft.id}>{draft.name}（未保存）</option>}
             {workflows.map((item) => <option key={item.id} value={item.id}>{item.name}（{item.id}）</option>)}
           </select>
+          <button type="button" className="create-workflow-button" onClick={() => setCreateOpen(true)}>
+            <Plus size={14} aria-hidden="true" />新建工作流
+          </button>
         </div>
         <div className="workflow-actions">
-          <button type="button" className="soft-button" onClick={() => requestLeave(createNew)}><Plus size={14} aria-hidden="true" />新建</button>
-          <button type="button" className="soft-button" onClick={() => requestLeave(copyCurrent)}><Copy size={14} aria-hidden="true" />复制</button>
           <button type="button" className="soft-button" onClick={() => setSettingsOpen(true)}><Settings2 size={14} aria-hidden="true" />设置</button>
           <button type="button" className="soft-button danger-button" onClick={() => setDeleteOpen(true)}><Trash2 size={14} aria-hidden="true" />删除</button>
-          <button type="button" className="soft-button" onClick={onOpenRun} disabled={!workflows.length}><Play size={14} aria-hidden="true" />运行</button>
+          <button type="button" className="soft-button" onClick={onOpenRun} disabled={!workflows.length}><Play size={14} aria-hidden="true" />试运行 / 发起运行</button>
           <button type="button" className="save-button" onClick={() => void save()} disabled={saving || copilotPending}>{saving ? <LoaderCircle className="animate-spin" size={14} aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}{saving ? '保存中…' : '保存'}</button>
         </div>
       </div>
@@ -428,27 +430,39 @@ export default function WorkflowEditor({
         onDeleteNode={deleteNode}
         onDeleteEdge={deleteEdge}
         onDropNode={addNode}
+        onOpenNode={(id) => setNodeDialogId(id)}
+        onOpenEdge={(id) => setEdgeDialogId(id)}
+        nodeActionLabel={() => '编辑'}
       />
       <div className="b-canvas-footer"><span><i aria-hidden="true" />{dirty ? '未保存更改' : '所有更改已保存'}</span><span>{stats.nodes} 个节点 · {stats.edges} 条连线 · 多出口普通边即并行</span></div>
+
+      <NodeEditorDialog
+        nodeId={nodeDialogId}
+        workflow={draft}
+        agents={agents}
+        workers={workers}
+        upstreamMap={upstreamMap}
+        onChangeNode={(nodeId, patch) => updateDraft((current) => ({ ...current, nodes: current.nodes.map((node) => node.id === nodeId ? { ...node, ...patch } : node) }))}
+        onChangeEdge={changeEdge}
+        onAddEdge={addEdge}
+        onDeleteEdge={deleteEdge}
+        onSetEntry={(entry_point) => updateDraft((current) => ({ ...current, entry_point }))}
+        onDeleteNode={deleteNode}
+        onRenameNode={renameNode}
+        onClose={() => setNodeDialogId(null)}
+      />
+      <EdgeEditorDialog
+        edgeId={edgeDialogId}
+        workflow={draft}
+        upstreamMap={upstreamMap}
+        onChangeEdge={changeEdge}
+        onDeleteEdge={deleteEdge}
+        onClose={() => setEdgeDialogId(null)}
+      />
+      <CreateWorkflowDialog open={createOpen} workflows={workflows} agents={agents} onClose={() => setCreateOpen(false)} onCreated={handleCreated} />
+      <WorkflowSettingsDialog open={settingsOpen} workflow={draft} onClose={() => setSettingsOpen(false)} onSave={saveSettings} />
+      <ConfirmDialog open={deleteOpen} title="删除工作流" description={`确定删除「${draft.name}」（${draft.id}）吗？此操作不可撤销。`} confirmLabel="确认删除" pending={deleting} onClose={() => setDeleteOpen(false)} onConfirm={() => void remove()} />
+      <ConfirmDialog open={leaveAction !== null} title="放弃未保存更改" description="当前画布有未保存修改，继续操作将放弃这些更改。你也可以先取消并保存工作流。" confirmLabel="放弃并继续" onClose={() => setLeaveAction(null)} onConfirm={() => { const action = leaveAction; setLeaveAction(null); action?.() }} />
     </section>
-
-    <WorkflowInspector
-      workflow={draft}
-      selection={selection}
-      agents={agents}
-      workers={workers}
-      upstreamMap={upstreamMap}
-      onChangeNode={(nodeId, patch) => updateDraft((current) => ({ ...current, nodes: current.nodes.map((node) => node.id === nodeId ? { ...node, ...patch } : node) }))}
-      onChangeEdge={changeEdge}
-      onSetEntry={(entry_point) => updateDraft((current) => ({ ...current, entry_point }))}
-      onDeleteNode={deleteNode}
-      onDeleteEdge={deleteEdge}
-      onAddEdge={addEdge}
-      onSelect={setSelection}
-    />
-
-    <WorkflowSettingsDialog open={settingsOpen} workflow={draft} idReadOnly={baseline !== ''} onClose={() => setSettingsOpen(false)} onSave={(next) => { setDraft(normalizeWorkflow(next)); setSelection(null) }} />
-    <ConfirmDialog open={deleteOpen} title="删除工作流" description={`确定删除「${draft.name}」（${draft.id}）吗？此操作不可撤销。`} confirmLabel="确认删除" pending={deleting} onClose={() => setDeleteOpen(false)} onConfirm={() => void remove()} />
-    <ConfirmDialog open={leaveAction !== null} title="放弃未保存更改" description="当前画布有未保存修改，继续操作将放弃这些更改。你也可以先取消并保存工作流。" confirmLabel="放弃并继续" onClose={() => setLeaveAction(null)} onConfirm={() => { const action = leaveAction; setLeaveAction(null); action?.() }} />
-  </>
+  )
 }

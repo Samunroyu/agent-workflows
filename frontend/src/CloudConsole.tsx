@@ -1,26 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle, Bell, ChevronDown, CircleCheck, Clock3, Cloud, Inbox,
-  LayoutDashboard, LoaderCircle, Plus, Search, Settings2, Sparkles,
-  TimerReset, Workflow, X, Zap,
+  LoaderCircle, Play, Plus, Search, Settings2, Square, TimerReset, Workflow, X,
 } from 'lucide-react'
 import { api } from './api'
-import { formatRelativeTime, isToday, runTask } from './format'
+import { isToday, runTask } from './format'
 import type {
   AgentProfileOut, HealthOut, RunStateOut, StartRunOut,
   WorkerInfoOut, WorkflowSpec,
 } from './types'
 import FlowCanvas from './components/FlowCanvas'
 import WorkflowEditor from './components/WorkflowEditor'
-import RunMonitor from './components/RunMonitor'
+import RunNodeWorkbenchDialog from './components/RunNodeWorkbenchDialog'
 import { AgentManagerDialog, NewRunDialog } from './components/Dialogs'
 import { Avatar, RunRow, StatusBadge } from './components/Shared'
+
+type ActiveView = 'editor' | 'runs'
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
 export default function CloudConsole() {
+  const [activeView, setActiveView] = useState<ActiveView>('editor')
   const [health, setHealth] = useState<HealthOut | null>(null)
   const [workflows, setWorkflows] = useState<WorkflowSpec[]>([])
   const [runs, setRuns] = useState<RunStateOut[]>([])
@@ -30,6 +32,7 @@ export default function CloudConsole() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedRun, setSelectedRun] = useState<RunStateOut | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [workbenchNodeId, setWorkbenchNodeId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [query, setQuery] = useState('')
@@ -144,13 +147,7 @@ export default function CloudConsole() {
     setSelectedRunId(run.thread_id)
     setSelectedRun(run)
     setSelectedNodeId(run.running_nodes?.[0] ?? run.next?.[0] ?? Object.keys(run.values?.nodes ?? {})[0] ?? null)
-    setLoadError('')
-  }
-
-  const clearSelectedRun = () => {
-    setSelectedRunId(null)
-    setSelectedRun(null)
-    setSelectedNodeId(null)
+    setWorkbenchNodeId(null)
     setLoadError('')
   }
 
@@ -164,9 +161,11 @@ export default function CloudConsole() {
 
   const onStarted = (result: StartRunOut) => {
     setRunDialogOpen(false)
+    setActiveView('runs')
     setSelectedRunId(result.thread_id)
     setSelectedNodeId(null)
     setSelectedRun(null)
+    setWorkbenchNodeId(null)
     setToast(result.warnings?.length ? `运行已创建：${result.warnings.join('；')}` : '运行已创建，正在执行')
     void refreshRuns().catch(() => undefined)
   }
@@ -186,6 +185,15 @@ export default function CloudConsole() {
     }
   }
 
+  const openWaitingRun = () => {
+    setActiveView('runs')
+    const target = waitingRuns[0]
+    if (!target) return
+    selectRun(target)
+    const interrupt = target.interrupts?.[0]
+    setWorkbenchNodeId(interrupt?.node_id ?? null)
+  }
+
   const waitingRuns = useMemo(() => runs.filter((run) => run.status === 'waiting' && (run.interrupts?.length ?? 0) > 0), [runs])
   const filteredRuns = useMemo(() => runs.filter((run) => {
     const matchesQuery = `${runTask(run)} ${run.thread_id} ${run.workflow_id}`.toLowerCase().includes(query.toLowerCase())
@@ -195,65 +203,149 @@ export default function CloudConsole() {
   const finishedRuns = runs.filter((run) => ['done', 'error', 'interrupted', 'cancelled'].includes(run.status))
   const successfulRuns = runs.filter((run) => run.status === 'done' && run.values?.action !== 'abort').length
   const successRate = finishedRuns.length ? `${(successfulRuns / finishedRuns.length * 100).toFixed(1)}%` : '—'
-  const greeting = now.getHours() < 12 ? '早上好' : now.getHours() < 18 ? '下午好' : '晚上好'
   const monitorWorkflow = selectedRun ? workflows.find((item) => item.id === selectedRun.workflow_id) ?? null : null
   const onlineAgents = health?.online_agents ?? agents.filter((agent) => agent.available).map((agent) => agent.id)
+  const selectedInterrupt = selectedRun?.interrupts?.[0] ?? null
 
   return <div className="demo-b demo-shell cloud-console">
     <nav className="b-rail" aria-label="主导航">
       <div className="b-logo"><Cloud size={21} aria-hidden="true" /></div>
       <div className="b-rail__links">
-        <button type="button" className="is-active" aria-label="总览" title="总览" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><LayoutDashboard size={19} aria-hidden="true" /></button>
-        <button type="button" aria-label="工作流" title="工作流" onClick={() => document.getElementById(selectedRun ? 'run-workflow-panel' : 'workflow-panel')?.scrollIntoView({ behavior: 'smooth' })}><Workflow size={19} aria-hidden="true" /></button>
-        <button type="button" aria-label="运行记录" title="运行记录" onClick={() => document.getElementById('runs-panel')?.scrollIntoView({ behavior: 'smooth' })}><TimerReset size={19} aria-hidden="true" /></button>
+        <button type="button" className={activeView === 'editor' ? 'is-active' : ''} aria-pressed={activeView === 'editor'} aria-label="工作流编排" title="工作流编排" onClick={() => setActiveView('editor')}><Workflow size={19} aria-hidden="true" /></button>
+        <button type="button" className={activeView === 'runs' ? 'is-active' : ''} aria-pressed={activeView === 'runs'} aria-label="运行监控中心" title="运行监控中心" onClick={() => setActiveView('runs')}><TimerReset size={19} aria-hidden="true" /></button>
       </div>
       <div className="b-rail__bottom"><Avatar /></div>
     </nav>
     <div className="b-body">
       <header className="b-header">
-        <div className="b-breadcrumb"><span>工作空间</span><span>/</span><strong>{selectedRun ? '运行监控' : '编排编辑'}</strong></div>
+        <div className="b-breadcrumb"><span>工作空间</span><span>/</span><strong>{activeView === 'editor' ? '工作流编排' : '运行监控中心'}</strong></div>
         <div className="b-header__right">
-          <search className="run-search"><Search size={15} aria-hidden="true" /><label className="visually-hidden" htmlFor="run-search">搜索运行记录</label><input ref={searchRef} id="run-search" name="q" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索运行记录" autoCorrect="off" autoCapitalize="off" spellCheck={false} /><kbd aria-hidden="true">⌘ K</kbd></search>
           <button type="button" className="soft-button agent-manager-button" onClick={() => setAgentDialogOpen(true)}><Settings2 size={14} aria-hidden="true" />Agent 管理</button>
-          <button type="button" className="icon-button notification-button" aria-label={`${waitingRuns.length} 项待审批`} title={`${waitingRuns.length} 项待审批`} onClick={() => waitingRuns[0] && selectRun(waitingRuns[0])}><Bell size={18} aria-hidden="true" />{waitingRuns.length > 0 && <i aria-hidden="true" />}</button>
+          <button type="button" className="icon-button notification-button" aria-label={`${waitingRuns.length} 项待审批`} title={`${waitingRuns.length} 项待审批`} onClick={openWaitingRun}><Bell size={18} aria-hidden="true" />{waitingRuns.length > 0 && <i aria-hidden="true" />}</button>
           <span className="console-clock">{now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
           <span className={`health-pill ${health ? '' : 'is-offline'}`}><i aria-hidden="true" />{health ? `${onlineAgents.length} 个 Agent 在线${onlineAgents.length ? `：${onlineAgents.join(', ')}` : ''}` : '后端离线'}</span>
         </div>
       </header>
-      <main className="b-main">
-        <section className="b-welcome"><div><span className="b-kicker"><Sparkles size={13} aria-hidden="true" />AGENT ORCHESTRATION</span><h1>{greeting} <span aria-hidden="true">👋</span></h1><p>{waitingRuns.length ? `有 ${waitingRuns.length} 项人工审批等待处理，运行中的并行节点可分别查看。` : '自由编排工作流，点击任意运行节点查看实时日志与产出。'}</p></div><button type="button" className="b-new-run" onClick={() => setRunDialogOpen(true)} disabled={!workflows.length}><Plus size={17} aria-hidden="true" /><span className="new-run-label">发起新运行</span></button></section>
 
-        {loadError && <div className="console-banner console-banner--error" role="alert"><AlertCircle size={16} aria-hidden="true" /><span>{loadError}。请确认后端已在 8080 端口启动。</span><button type="button" onClick={() => void loadInitial()}>重新连接</button></div>}
-        {toast && <div className="console-toast" role="status" aria-live="polite" aria-atomic="true"><CircleCheck size={16} aria-hidden="true" /><span>{toast}</span><button type="button" aria-label="关闭通知" onClick={() => setToast('')}><X size={14} aria-hidden="true" /></button></div>}
+      {loadError && <div className="console-banner console-banner--error" role="alert"><AlertCircle size={16} aria-hidden="true" /><span>{loadError}。请确认后端已在 8080 端口启动。</span><button type="button" onClick={() => void loadInitial()}>重新连接</button></div>}
+      {toast && <div className="console-toast" role="status" aria-live="polite" aria-atomic="true"><CircleCheck size={16} aria-hidden="true" /><span>{toast}</span><button type="button" aria-label="关闭通知" onClick={() => setToast('')}><X size={14} aria-hidden="true" /></button></div>}
 
-        <section className="b-stats" aria-label="运行统计">
-          <div><span className="stat-icon stat-icon--purple"><Workflow size={18} aria-hidden="true" /></span><p>可用工作流<strong>{workflows.length}</strong><small><i aria-hidden="true" />{workers.length} 个执行主机</small></p></div>
-          <div><span className="stat-icon stat-icon--blue"><Zap size={18} aria-hidden="true" /></span><p>今日运行<strong>{todayRuns}</strong><small>全部运行 {runs.length} 次</small></p></div>
-          <div><span className="stat-icon stat-icon--green"><CircleCheck size={18} aria-hidden="true" /></span><p>运行成功率<strong>{successRate}</strong><small>{finishedRuns.length ? `${successfulRuns} / ${finishedRuns.length} 次已完成` : '暂无已结束运行'}</small></p></div>
-        </section>
-
-        {loading ? <div className="canvas-loading"><progress aria-label="正在加载操作台" /><span>正在加载工作流与运行状态…</span></div> : <div className={`b-workspace ${selectedRun ? 'is-monitor' : 'is-editor'}`}>
-          <div className="editor-session" hidden={Boolean(selectedRun)}>
-            <WorkflowEditor workflows={workflows} selectedWorkflowId={selectedWorkflowId} agents={agents} workers={workers} onSelectWorkflow={setSelectedWorkflowId} onWorkflowsChanged={refreshWorkflows} onOpenRun={() => setRunDialogOpen(true)} onToast={setToast} />
+      {activeView === 'editor' ? (
+        <main className="view editor-view" aria-label="工作流编排页">
+          {loading ? (
+            <div className="canvas-loading"><progress aria-label="正在加载操作台" /><span>正在加载工作流与运行状态…</span></div>
+          ) : (
+            <WorkflowEditor
+              workflows={workflows}
+              selectedWorkflowId={selectedWorkflowId}
+              agents={agents}
+              workers={workers}
+              onSelectWorkflow={setSelectedWorkflowId}
+              onWorkflowsChanged={refreshWorkflows}
+              onOpenRun={() => setRunDialogOpen(true)}
+              onToast={setToast}
+            />
+          )}
+        </main>
+      ) : (
+        <main className="runs-view" aria-label="运行监控中心">
+          <div className="runs-toolbar">
+            <div className="runs-stats" aria-label="运行统计">
+              <span>今日运行 <strong>{todayRuns}</strong></span>
+              <span>成功率 <strong>{successRate}</strong></span>
+              <span>待审批 <strong>{waitingRuns.length}</strong></span>
+              <span>全部 <strong>{runs.length}</strong></span>
+            </div>
+            <search className="run-search">
+              <Search size={15} aria-hidden="true" />
+              <label className="visually-hidden" htmlFor="run-search">搜索运行记录</label>
+              <input ref={searchRef} id="run-search" name="q" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索运行记录" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
+              <kbd aria-hidden="true">⌘ K</kbd>
+            </search>
+            <button type="button" className={`runs-filter ${waitingOnly ? 'is-active' : ''}`} aria-pressed={waitingOnly} onClick={() => setWaitingOnly((value) => !value)}>
+              <Clock3 size={12} aria-hidden="true" />{waitingOnly ? '查看全部' : '仅看待审批'}<ChevronDown size={13} aria-hidden="true" />
+            </button>
+            <button type="button" className="b-new-run" onClick={() => setRunDialogOpen(true)} disabled={!workflows.length}>
+              <Plus size={15} aria-hidden="true" /><span className="new-run-label">发起新运行</span>
+            </button>
           </div>
-          {selectedRun && (monitorWorkflow ? <>
-            <section className="b-canvas-card run-canvas-card" id="run-workflow-panel">
-              <div className="b-card-header"><div className="b-workflow-title"><span><Workflow size={18} aria-hidden="true" /></span><div><strong>{monitorWorkflow.name}</strong><small>运行视图基于已保存的工作流定义</small></div></div><StatusBadge status={selectedRun.status} /></div>
-              <FlowCanvas workflow={monitorWorkflow} mode="monitor" run={selectedRun} selected={selectedNodeId ? { type: 'node', id: selectedNodeId } : null} onSelect={(selection) => { if (selection?.type === 'node' && !['START', 'END'].includes(selection.id)) setSelectedNodeId(selection.id) }} />
-              <div className="b-canvas-footer"><span><i aria-hidden="true" />{selectedRun.running_nodes?.length ? `${selectedRun.running_nodes.length} 个节点并行执行中` : `运行 ${selectedRun.thread_id.slice(0, 16)}`}</span><span>点击节点查看详情</span></div>
-            </section>
-            <RunMonitor run={selectedRun} workflow={monitorWorkflow} agents={agents} selectedNodeId={selectedNodeId} onClose={clearSelectedRun} onRefresh={refreshSelectedRun} onToast={setToast} />
-          </> : <section className="editor-empty" role="alert"><AlertCircle size={24} aria-hidden="true" /><h2>找不到此次运行的工作流定义</h2><p>工作流可能已被删除，运行记录仍保留在下方列表。</p><button type="button" className="soft-button" onClick={clearSelectedRun}>返回编排编辑</button></section>)}
-        </div>}
 
-        <section className="b-recent" id="runs-panel">
-          <div className="b-section-title"><div><strong>运行记录</strong><span>{filteredRuns.length} 条结果</span></div><button type="button" className={waitingOnly ? 'is-active' : ''} aria-pressed={waitingOnly} onClick={() => setWaitingOnly((value) => !value)}><Clock3 size={12} aria-hidden="true" />{waitingOnly ? '查看全部' : '仅看待审批'}<ChevronDown size={13} aria-hidden="true" /></button></div>
-          {loading ? <div className="runs-loading"><LoaderCircle className="animate-spin" size={18} aria-hidden="true" /><span>正在加载运行记录…</span></div> : filteredRuns.length ? <div className="b-run-grid">{filteredRuns.map((run) => <RunRow key={run.thread_id} run={run} selected={selectedRunId === run.thread_id} onClick={() => selectRun(run)} onCancel={() => void cancelFromList(run)} cancelPending={cancelPendingId === run.thread_id} />)}</div> : <div className="runs-empty"><Inbox size={22} aria-hidden="true" /><strong>{query || waitingOnly ? '没有匹配的运行' : '还没有运行记录'}</strong><p>{query || waitingOnly ? '试试调整搜索词或筛选条件。' : '发起第一个运行后，状态会自动更新。'}</p>{!query && !waitingOnly && <button type="button" onClick={() => setRunDialogOpen(true)} disabled={!workflows.length}><Plus size={14} aria-hidden="true" />新建运行</button>}</div>}
-        </section>
-        <p className="workspace-footnote">{health?.default_repo ? `默认工作区：${health.default_repo}` : '工作区路径由 Worker 配置决定'} · 最近更新 {formatRelativeTime(new Date().toISOString())}</p>
-      </main>
+          <div className="runs-body">
+            <div className="runs-list" aria-label="运行记录列表">
+              {loading ? (
+                <div className="runs-loading"><LoaderCircle className="animate-spin" size={18} aria-hidden="true" /><span>正在加载运行记录…</span></div>
+              ) : filteredRuns.length ? (
+                filteredRuns.map((run) => <RunRow key={run.thread_id} run={run} selected={selectedRunId === run.thread_id} onClick={() => selectRun(run)} onCancel={() => void cancelFromList(run)} cancelPending={cancelPendingId === run.thread_id} />)
+              ) : (
+                <div className="runs-empty"><Inbox size={22} aria-hidden="true" /><strong>{query || waitingOnly ? '没有匹配的运行' : '还没有运行记录'}</strong><p>{query || waitingOnly ? '试试调整搜索词或筛选条件。' : '发起第一个运行后，状态会自动更新。'}</p></div>
+              )}
+            </div>
+
+            {selectedRun ? (monitorWorkflow ? (
+              <section className="b-canvas-card run-canvas-card" id="run-workflow-panel">
+                <div className="b-card-header">
+                  <div className="b-workflow-title">
+                    <span><Workflow size={18} aria-hidden="true" /></span>
+                    <div><strong>{monitorWorkflow.name}</strong><small>{runTask(selectedRun)} · {selectedRun.thread_id.slice(0, 16)}</small></div>
+                  </div>
+                  <div>
+                    <StatusBadge status={selectedRun.status} />
+                    {selectedRun.status === 'running' && (
+                      <button type="button" className="kill-button" onClick={() => void cancelFromList(selectedRun)} disabled={cancelPendingId === selectedRun.thread_id}>
+                        <Square size={13} aria-hidden="true" />强杀中止
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {selectedRun.status === 'waiting' && selectedInterrupt && (
+                  <div className="run-banner run-banner--waiting" role="status">
+                    <span>运行停靠在人工卡点「{selectedInterrupt.label || selectedInterrupt.node_id || '人工审批'}」，等待审批。</span>
+                    <button type="button" onClick={() => setWorkbenchNodeId(selectedInterrupt.node_id ?? selectedNodeId)}>打开人工审批工作台</button>
+                  </div>
+                )}
+                {['error', 'cancelled', 'interrupted'].includes(selectedRun.status) && (
+                  <div className="run-banner run-banner--error" role="alert">
+                    <span>运行处于{selectedRun.status === 'error' ? '失败' : '中止'}断点{selectedRun.next?.length ? `（${selectedRun.next.join(', ')}）` : ''}，可原地重试。</span>
+                    <button type="button" onClick={() => setWorkbenchNodeId(selectedRun.next?.[0] ?? selectedNodeId)}>打开断点重试工作台</button>
+                  </div>
+                )}
+                <FlowCanvas
+                  workflow={monitorWorkflow}
+                  mode="monitor"
+                  run={selectedRun}
+                  selected={selectedNodeId ? { type: 'node', id: selectedNodeId } : null}
+                  onSelect={(selection) => { if (selection?.type === 'node' && !['START', 'END'].includes(selection.id)) setSelectedNodeId(selection.id) }}
+                  onOpenNode={(nodeId) => { setSelectedNodeId(nodeId); setWorkbenchNodeId(nodeId) }}
+                  nodeActionLabel={(node) => {
+                    if (selectedRun.status === 'waiting' && (selectedRun.interrupts ?? []).some((interrupt) => interrupt.node_id === node.id)) return '立即审批'
+                    if (['error', 'cancelled', 'interrupted'].includes(selectedRun.status) && (selectedRun.next ?? []).includes(node.id)) return '重试'
+                    return '查看日志'
+                  }}
+                />
+                <div className="b-canvas-footer"><span><i aria-hidden="true" />{selectedRun.running_nodes?.length ? `${selectedRun.running_nodes.length} 个节点并行执行中` : `运行 ${selectedRun.thread_id.slice(0, 16)}`}</span><span>双击节点或点卡片按钮打开运行工作台</span></div>
+              </section>
+            ) : (
+              <section className="editor-empty" role="alert"><AlertCircle size={24} aria-hidden="true" /><h2>找不到此次运行的工作流定义</h2><p>工作流可能已被删除，运行记录仍保留在左侧列表。</p></section>
+            )) : (
+              <section className="editor-empty"><Play size={24} aria-hidden="true" /><h2>选择一次运行开始盯盘</h2><p>从左侧运行记录中选择一次运行，实时拓扑、日志与人工审批都在这里。</p><button type="button" className="soft-button" onClick={() => setRunDialogOpen(true)} disabled={!workflows.length}><Plus size={14} aria-hidden="true" />发起新运行</button></section>
+            )}
+          </div>
+        </main>
+      )}
     </div>
 
+    {selectedRun && monitorWorkflow && (
+      <RunNodeWorkbenchDialog
+        run={selectedRun}
+        workflow={monitorWorkflow}
+        agents={agents}
+        nodeId={workbenchNodeId}
+        onSelectNode={(nodeId) => { setWorkbenchNodeId(nodeId); setSelectedNodeId(nodeId) }}
+        onClose={() => setWorkbenchNodeId(null)}
+        onRefresh={refreshSelectedRun}
+        onToast={setToast}
+      />
+    )}
     <NewRunDialog open={runDialogOpen} workflows={workflows} initialWorkflowId={selectedWorkflowId} onClose={() => setRunDialogOpen(false)} onStarted={onStarted} />
     <AgentManagerDialog open={agentDialogOpen} agents={agents} onClose={() => setAgentDialogOpen(false)} onChanged={refreshAgents} onToast={setToast} />
   </div>
